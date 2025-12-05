@@ -5,13 +5,13 @@
  * Помогает определить правильное имя интерфейса для использования
  */
 
-#include "npcap-defs.h"
 #include "soem/ec_eoe.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #ifdef _WIN32
+#include "npcap-defs.h"
 #include <winsock2.h>
 #include <iphlpapi.h>
 #include <pcap.h>
