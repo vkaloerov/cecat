@@ -1,0 +1,59 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# Compiled binaries
+*.exe
+*.out
+*.app
+*.o
+*.obj
+dummy-ecat-cli
+dummy-ecat-cli.exe
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# IDE specific files
+.vscode/
+.idea/
+.zed/
+.cache/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Visual Studio
+.vs/
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.sln
+
+# Backup files
+*.bak
+*.orig
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+temp/
+tmp/
+nul
+
+# OS specific
+Thumbs.db
+desktop.ini
+
+# SOEM specific (if building SOEM locally)
+SOEM/
+soem/
