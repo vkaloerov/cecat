@@ -860,15 +860,15 @@ static void cmd_text_write(int argc, char **argv) {
     }
 
     /* Конвертируем UTF-8 текст в коды дисплея MT-08S2A */
-    size_t data_len = 0;
-    size_t i = 0;
-    while (i < text_len) {
-        size_t bytes_read = 0;
-        data[data_len++] = text[i];//utf8_to_mt_display((unsigned char*)&text[i], &bytes_read);
-        i += bytes_read;
-    }
+    // size_t data_len = 0;
+    // size_t i = 0;
+    // while (i < text_len) {
+    //     size_t bytes_read = 0;
+    //     data[data_len++] = text[i];//utf8_to_mt_display((unsigned char*)&text[i], &bytes_read);
+    //     i += bytes_read;
+    // }
 
-    soem_write_data(slave_idx, addr, data, data_len);
+    soem_write_data(slave_idx, addr, text, text_len);
 
     free(data);
     free(text);
