@@ -131,7 +131,7 @@ cecat/
 
 ## License
 
-Educational use only. SOEM library is licensed under GPLv2.
+Educational use only. SOEM library is licensed under GPLv3.
 
 ## Notes
 
