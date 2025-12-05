@@ -1,10 +1,12 @@
 /*
  * list_adapters.c - Утилита для диагностики сетевых интерфейсов
- * 
+ *
  * Показывает доступные сетевые адаптеры для работы с SOEM/Npcap
  * Помогает определить правильное имя интерфейса для использования
  */
 
+#include "npcap-defs.h"
+#include "soem/ec_eoe.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +19,14 @@
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "wpcap.lib")
+#else
+#include <unistd.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <pcap/pcap.h>
+#include <pcap/pcap-npcap.h>
+#include <pcap/pcap-npcap.h>
 #endif
 
 #include "soem/soem.h"
@@ -114,7 +124,7 @@ void print_adapters_windows() {
             printf("%d. %S\n", i++, pCurrAddresses->FriendlyName);
             printf("   Description: %S\n", pCurrAddresses->Description);
             printf("   Adapter name: %s\n", pCurrAddresses->AdapterName);
-            
+
             /* Показываем MAC адрес */
             if (pCurrAddresses->PhysicalAddressLength != 0) {
                 printf("   MAC Address: ");
@@ -156,10 +166,10 @@ void print_adapters_windows() {
 
 void test_soem_init(const char *ifname) {
     ecx_contextt ecx_context;
-    
+
     printf("\n=== Testing SOEM Init ===\n");
     printf("Interface: %s\n", ifname);
-    
+
     int result = ecx_init(&ecx_context, ifname);
     if (result > 0) {
         printf("✓ SUCCESS! SOEM initialized successfully\n");
