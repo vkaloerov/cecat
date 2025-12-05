@@ -676,11 +676,10 @@ static void cmd_help(void) {
     printf("  write <idx> <addr> <byte1> <byte2> ...\n");
     printf("                    - Write bytes to slave <idx> at address <addr>\n");
     printf("                      Example: write 1 0x1000 0x12 0x34 0xAB\n");
-    printf("  text_write <idx> <addr> <text>\n");
+    printf("  text-write <idx> <addr> <text>\n");
     printf("                    - Write text string to slave <idx> at address <addr>\n");
     printf("                      Supports ASCII and Cyrillic (UTF-8) for MT-08S2A display\n");
-    printf("                      Example: text_write 1 0x1000 Hello World\n");
-    printf("                      Example: text_write 1 0x1000 Привет Мир\n");
+    printf("                      Example: text-write 1 0x1000 Hello World\n");
     printf("\n");
     printf("PDO Cyclic Data Exchange:\n");
     printf("  pdo-start         - Start PDO exchange (transition to OPERATIONAL)\n");
@@ -1069,7 +1068,7 @@ static bool process_command(char *line) {
     else if (strcmp(argv[0], "write") == 0) {
         cmd_write(argc, argv);
     }
-    else if (strcmp(argv[0], "text_write") == 0) {
+    else if (strcmp(argv[0], "text-write") == 0) {
         cmd_text_write(argc, argv);
     }
     else if (strcmp(argv[0], "verbose") == 0) {
