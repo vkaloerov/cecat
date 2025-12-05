@@ -8,6 +8,8 @@ Cross-platform command-line utilities for testing and debugging EtherCAT network
 - **dummy-ecat-cli** - Interactive CLI for EtherCAT slave configuration and PDO exchange
 - **list-adapters** - Network interface discovery and diagnostic tool
 
+**Supports:** Leadshine EM3E-556 stepper motor control via CiA 402 profile
+
 ## Requirements
 
 ### Windows
@@ -76,19 +78,60 @@ verbose       - Toggle verbose mode
 exit          - Exit program
 ```
 
+## Motor Control (Leadshine EM3E-556)
+
+### Quick Start
+```bash
+# 1. Connect and scan
+scan
+pdo-start
+
+# 2. Enable motor drive
+motor-enable 1
+
+# 3. Run motor for 10 seconds at 100 RPM
+motor-run 1 100 10
+
+# 4. Change velocity (forward/reverse)
+motor-velocity 1 200      # 200 RPM forward
+motor-velocity 1 -150     # 150 RPM reverse
+
+# 5. Stop motor
+motor-stop 1
+motor-disable 1
+```
+
+### Motor Commands
+```
+motor-enable <idx>           - Enable motor drive
+motor-disable <idx>          - Disable motor drive
+motor-run <idx> <rpm> <sec>  - Run for specified time
+motor-velocity <idx> <rpm>   - Set velocity (+ forward, - reverse)
+motor-stop <idx>             - Emergency stop
+motor-status <idx>           - Show motor status
+```
+
+📖 **See [EM3E_QUICKSTART.md](EM3E_QUICKSTART.md) for detailed motor control guide**
+
 ## Project Structure
 ```
 cecat/
-├── ecat_cli.c       - Main CLI application
-├── list_adapters.c  - Network diagnostic tool
-├── CMakeLists.txt   - Build configuration
+├── ecat_cli.c           - Main CLI application with EM3E-556 control
+├── list_adapters.c      - Network diagnostic tool
+├── CMakeLists.txt       - Build configuration
+├── EM3E_QUICKSTART.md   - Motor control guide
 └── .zed/
-    └── debug.json   - Debug configuration for Zed editor
+    └── debug.json       - Debug configuration for Zed editor
 ```
+
+## Supported Devices
+
+- ✅ Leadshine EM3E-556 EtherCAT Stepper Drive
+- ✅ Generic EtherCAT slaves (via PDO read/write)
 
 ## License
 
-Educational use only. SOEM library is licensed under GPLv3.
+Educational use only. SOEM library is licensed under GPLv2.
 
 ## Notes
 
