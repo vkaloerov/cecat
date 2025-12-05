@@ -23,6 +23,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <pcap/pcap.h>
 #include <net/if.h>
 #include <ifaddrs.h>

@@ -130,7 +130,7 @@ endif()
 if(WIN32)
     target_link_libraries(list-adapters soem ws2_32 winmm wpcap packet iphlpapi)
 else()
-    target_link_libraries(list-adapters soem pthread rt)
+    target_link_libraries(list-adapters soem pthread rt pcap)
 endif()
 
 # Установка
