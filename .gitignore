@@ -57,3 +57,6 @@ desktop.ini
 # SOEM specific (if building SOEM locally)
 SOEM/
 soem/
+.clangd
+compile_commands.json
+dummy-ecat-cli.pdb
