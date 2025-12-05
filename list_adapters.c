@@ -5,7 +5,6 @@
  * Помогает определить правильное имя интерфейса для использования
  */
 
-#include "soem/ec_eoe.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -25,8 +24,8 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <pcap/pcap.h>
-#include <pcap/pcap-npcap.h>
-#include <pcap/pcap-npcap.h>
+#include <net/if.h>
+#include <ifaddrs.h>
 #endif
 
 #include "soem/soem.h"
@@ -82,6 +81,50 @@ void print_adapters_pcap() {
     }
 
     pcap_freealldevs(alldevs);
+}
+
+void print_adapters_linux() {
+#ifndef _WIN32
+    struct ifaddrs *ifaddr, *ifa;
+    int family, i = 1;
+    char host[NI_MAXHOST];
+
+    printf("\n=== Linux Network Interfaces ===\n\n");
+
+    if (getifaddrs(&ifaddr) == -1) {
+        perror("getifaddrs");
+        return;
+    }
+
+    /* Iterate through linked list */
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (ifa->ifa_addr == NULL)
+            continue;
+
+        family = ifa->ifa_addr->sa_family;
+
+        /* Display interface name and family */
+        if (family == AF_INET) {
+            if (getnameinfo(ifa->ifa_addr, sizeof(struct sockaddr_in),
+                           host, NI_MAXHOST, NULL, 0, NI_NUMERICHOST) == 0) {
+                printf("%d. %s\n", i++, ifa->ifa_name);
+                printf("   IPv4: %s\n", host);
+
+                /* Check interface flags */
+                printf("   Flags:");
+                if (ifa->ifa_flags & IFF_UP)
+                    printf(" UP");
+                if (ifa->ifa_flags & IFF_RUNNING)
+                    printf(" RUNNING");
+                if (ifa->ifa_flags & IFF_LOOPBACK)
+                    printf(" LOOPBACK");
+                printf("\n\n");
+            }
+        }
+    }
+
+    freeifaddrs(ifaddr);
+#endif
 }
 
 void print_adapters_windows() {
@@ -192,9 +235,13 @@ void print_usage(const char *prog_name) {
     printf("\nOptions:\n");
     printf("  -t, --test <interface>  Test SOEM initialization with specified interface\n");
     printf("  -h, --help              Show this help message\n");
-    printf("\nExample:\n");
+    printf("Example:\n");
     printf("  %s\n", prog_name);
+#ifdef _WIN32
     printf("  %s -t \"\\Device\\NPF_{E0FF3CC3-015D-401E-9F41-6C525F9D4DB9}\"\n", prog_name);
+#else
+    printf("  sudo %s -t eth0\n", prog_name);
+#endif
 }
 
 int main(int argc, char *argv[]) {
@@ -232,8 +279,12 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    /* Показываем адаптеры через Windows API */
+    /* Показываем адаптеры через Windows API или Linux ifaddrs */
+#ifdef _WIN32
     print_adapters_windows();
+#else
+    print_adapters_linux();
+#endif
 
     /* Показываем адаптеры через Pcap */
     print_adapters_pcap();
@@ -244,9 +295,15 @@ int main(int argc, char *argv[]) {
     } else {
         printf("\n=== Recommendations ===\n");
         printf("1. Choose an interface that is UP and RUNNING\n");
+#ifdef _WIN32
         printf("2. Use the NPF Device path with your application\n");
         printf("3. Run with Administrator privileges\n");
         printf("4. Test the interface with: %s -t \"<NPF_Device_Path>\"\n", argv[0]);
+#else
+        printf("2. Use the interface name (e.g., eth0, enp0s3) with your application\n");
+        printf("3. Run with root privileges (sudo)\n");
+        printf("4. Test the interface with: sudo %s -t \"eth0\"\n", argv[0]);
+#endif
     }
 
 #ifdef _WIN32
