@@ -1148,12 +1148,26 @@ static bool motor_em3e_556_enable(int slave_idx) {
             printf("\n✗ Drive in FAULT state. Resetting...\n");
             outputs->control_word = CW_FAULT_RESET;
             soem_exchange_pdo();
+            int reset_attempts = 0;
+            bool fault_cleared = false;
+            while (reset_attempts < 10) {
+                soem_exchange_pdo();
+                state = motor_em3e_556_get_state(inputs->status_word);
+                if (state != STATE_FAULT) {
+                    printf("  Fault cleared.\n");
+                    fault_cleared = true;
+                    break;
+                }
+                reset_attempts++;
 #ifdef _WIN32
-            Sleep(100);
+                Sleep(100);
 #else
-            usleep(100000);
+                usleep(100000);
 #endif
-            outputs->control_word = 0;
+            }
+            if (!fault_cleared) {
+                printf("  Failed to clear fault.\n");
+            }
         } else if (state == STATE_SWITCH_ON_DISABLED) {
             outputs->control_word = CW_ENABLE_VOLTAGE | CW_QUICK_STOP;
         } else if (state == STATE_READY_TO_SWITCH_ON) {
