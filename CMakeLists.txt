@@ -66,7 +66,7 @@ if(WIN32 AND DEFINED NPCAP_SDK_DIR)
 endif()
 
 # Основной исполняемый файл
-add_executable(dummy-ecat-cli ecat_cli.c)
+add_executable(dummy-ecat-cli ecat_cli.c my_hex_dump.c)
 
 # Добавляем include directories для target
 if(WIN32)

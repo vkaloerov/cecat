@@ -26,9 +26,12 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <termios.h>
+#include <pwd.h>
 #endif
 
 #include "soem/soem.h"
+#include "my_hex_dump.h"
 
 /* ============================================================================
  * Глобальные переменные для состояния SOEM
@@ -37,6 +40,8 @@
 #define MAX_IO_MAP_SIZE 4096
 #define MAX_COMMAND_LEN 256
 #define MAX_ARGS 32
+#define MAX_HISTORY 100
+#define HISTORY_FILENAME ".ecat_cli_history"
 
 static char IOmap[MAX_IO_MAP_SIZE];  /* Буфер для I/O mapping */
 static bool soem_initialized = false; /* Флаг инициализации SOEM */
@@ -47,6 +52,306 @@ static volatile bool pdo_running = false; /* Флаг работы PDO цикл�
 
 /* SOEM 2.0 context structure */
 static ecx_contextt ecx_context;
+
+/* Forward declaration for log_verbose */
+static void log_verbose(const char *format, ...);
+
+/* ============================================================================
+ * История команд (Command History) - POSIX реализация с сохранением в файл
+ * ============================================================================ */
+
+typedef struct {
+    char commands[MAX_HISTORY][MAX_COMMAND_LEN];
+    int count;           /* Количество команд в истории */
+    int current;         /* Текущий индекс при навигации */
+} CommandHistory;
+
+static CommandHistory cmd_history = { .count = 0, .current = -1 };
+static char history_filepath[512] = "";
+
+/**
+ * Получить путь к файлу истории в домашней директории
+ */
+static void history_get_filepath(void) {
+    const char *home = getenv("HOME");
+    if (!home) {
+        struct passwd *pw = getpwuid(getuid());
+        if (pw) home = pw->pw_dir;
+    }
+
+    if (home && strlen(home) < 450) {
+        snprintf(history_filepath, sizeof(history_filepath),
+                 "%s/%s", home, HISTORY_FILENAME);
+    } else {
+        /* Fallback на /tmp если HOME не доступна */
+        snprintf(history_filepath, sizeof(history_filepath),
+                 "/tmp/%s", HISTORY_FILENAME);
+    }
+}
+
+/**
+ * Загрузить историю команд из файла
+ */
+static void history_load(void) {
+    if (strlen(history_filepath) == 0) {
+        history_get_filepath();
+    }
+
+    FILE *f = fopen(history_filepath, "r");
+    if (!f) return;  /* Файл еще не существует - это OK */
+
+    cmd_history.count = 0;
+    while (cmd_history.count < MAX_HISTORY) {
+        if (fgets(cmd_history.commands[cmd_history.count],
+                  MAX_COMMAND_LEN, f) == NULL) {
+            break;
+        }
+
+        /* Убираем newline */
+        size_t len = strlen(cmd_history.commands[cmd_history.count]);
+        if (len > 0 && cmd_history.commands[cmd_history.count][len-1] == '\n') {
+            cmd_history.commands[cmd_history.count][len-1] = '\0';
+        }
+
+        /* Пропускаем пустые строки */
+        if (strlen(cmd_history.commands[cmd_history.count]) > 0) {
+            cmd_history.count++;
+        }
+    }
+
+    fclose(f);
+    log_verbose("Loaded %d commands from history", cmd_history.count);
+}
+
+/**
+ * Сохранить историю команд в файл
+ */
+static void history_save(void) {
+    if (strlen(history_filepath) == 0) {
+        history_get_filepath();
+    }
+
+    FILE *f = fopen(history_filepath, "w");
+    if (!f) {
+        log_verbose("WARNING: Could not open history file for writing: %s",
+                    history_filepath);
+        return;
+    }
+
+    for (int i = 0; i < cmd_history.count; i++) {
+        fprintf(f, "%s\n", cmd_history.commands[i]);
+    }
+
+    fclose(f);
+}
+
+/**
+ * Добавить команду в историю и сохранить
+ */
+static void history_add(const char *cmd) {
+    /* Не добавляем пустые команды */
+    if (!cmd || strlen(cmd) == 0) return;
+
+    /* Не добавляем дубликаты подряд (последняя команда) */
+    if (cmd_history.count > 0) {
+        if (strcmp(cmd_history.commands[cmd_history.count - 1], cmd) == 0) {
+            return;
+        }
+    }
+
+    if (cmd_history.count < MAX_HISTORY) {
+        strncpy(cmd_history.commands[cmd_history.count], cmd, MAX_COMMAND_LEN - 1);
+        cmd_history.commands[cmd_history.count][MAX_COMMAND_LEN - 1] = '\0';
+        cmd_history.count++;
+    } else {
+        /* Циклический буфер - переписываем старейшую команду */
+        for (int i = 0; i < MAX_HISTORY - 1; i++) {
+            strcpy(cmd_history.commands[i], cmd_history.commands[i + 1]);
+        }
+        strncpy(cmd_history.commands[MAX_HISTORY - 1], cmd, MAX_COMMAND_LEN - 1);
+        cmd_history.commands[MAX_HISTORY - 1][MAX_COMMAND_LEN - 1] = '\0';
+    }
+
+    /* Сбросить текущий индекс навигации */
+    cmd_history.current = -1;
+
+    /* Сохранить в файл */
+    history_save();
+}
+
+/**
+ * Получить команду из истории по смещению от конца
+ * offset=1 -> последняя команда, offset=2 -> предпоследняя и т.д.
+ */
+static const char* history_get_back(int offset) {
+    if (cmd_history.count == 0 || offset <= 0 || offset > cmd_history.count) {
+        return NULL;
+    }
+    return cmd_history.commands[cmd_history.count - offset];
+}
+
+/**
+ * Показать историю команд (для команды 'history')
+ */
+static void history_show(void) {
+    if (cmd_history.count == 0) {
+        printf("История пуста\n");
+        return;
+    }
+    printf("\nИстория команд (%d):\n", cmd_history.count);
+    for (int i = 0; i < cmd_history.count; i++) {
+        printf("  %3d: %s\n", i + 1, cmd_history.commands[i]);
+    }
+    printf("\n");
+}
+
+/**
+ * Очистить историю (удалить файл)
+ */
+static void history_clear(void) {
+    if (strlen(history_filepath) == 0) {
+        history_get_filepath();
+    }
+
+    cmd_history.count = 0;
+    cmd_history.current = -1;
+
+    if (unlink(history_filepath) == 0) {
+        printf("История очищена\n");
+    }
+}
+
+/**
+ * Чтение строки с поддержкой истории (UP/DOWN стрелки)
+ * Только POSIX реализация (Linux, macOS, Raspberry Pi OS и т.д.)
+ */
+static bool read_line_with_history(char *buffer, size_t max_len) {
+    struct termios orig_termios, raw_termios;
+
+    /* Сохранить оригинальные настройки терминала */
+    if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) {
+        /* Fallback на обычный fgets если что-то пошло не так */
+        if (fgets(buffer, max_len, stdin) == NULL) return false;
+        size_t len = strlen(buffer);
+        while (len > 0 && (buffer[len - 1] == '\n' || buffer[len - 1] == '\r')) {
+            buffer[--len] = '\0';
+        }
+        return true;
+    }
+
+    raw_termios = orig_termios;
+    /* Отключаем canonical mode и echo */
+    raw_termios.c_lflag &= ~(ICANON | ECHO);
+    raw_termios.c_cc[VMIN] = 1;
+    raw_termios.c_cc[VTIME] = 0;
+
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw_termios) == -1) {
+        /* Fallback */
+        if (fgets(buffer, max_len, stdin) == NULL) return false;
+        size_t len = strlen(buffer);
+        while (len > 0 && (buffer[len - 1] == '\n' || buffer[len - 1] == '\r')) {
+            buffer[--len] = '\0';
+        }
+        return true;
+    }
+
+    int pos = 0;
+    int history_offset = 0;  /* 0 = текущая строка, 1 = последняя команда и т.д. */
+    char temp_buffer[MAX_COMMAND_LEN];
+    strcpy(temp_buffer, "");
+
+    while (1) {
+        unsigned char c;
+        if (read(STDIN_FILENO, &c, 1) == -1) {
+            break;
+        }
+
+        if (c == '\n' || c == '\r') {
+            /* Enter - завершить ввод */
+            buffer[pos] = '\0';
+            printf("\n");
+            tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+            return true;
+        }
+        else if (c == 127 || c == '\b') {
+            /* Backspace */
+            if (pos > 0) {
+                pos--;
+                printf("\b \b");
+                fflush(stdout);
+                buffer[pos] = '\0';
+                strcpy(temp_buffer, buffer);
+                history_offset = 0;
+            }
+        }
+        else if (c == 27) {
+            /* ESC - возможно начало escape sequence */
+            unsigned char seq[2];
+            if (read(STDIN_FILENO, &seq[0], 1) != 1) break;
+            if (seq[0] != '[') continue;
+            if (read(STDIN_FILENO, &seq[1], 1) != 1) break;
+
+            if (seq[1] == 'A') {
+                /* UP arrow - показать предыдущую команду */
+                history_offset++;
+                const char *hist = history_get_back(history_offset);
+                if (hist == NULL) {
+                    history_offset--;
+                    continue;
+                }
+
+                /* Очистить текущую строку и показать историческую */
+                printf("\r");
+                printf("dummy_says> ");
+                for (int i = 0; i < pos; i++) printf(" ");
+                printf("\r");
+                printf("dummy_says> %s", hist);
+                strcpy(buffer, hist);
+                pos = strlen(hist);
+            }
+            else if (seq[1] == 'B') {
+                /* DOWN arrow - показать следующую команду или текущую */
+                if (history_offset > 0) {
+                    history_offset--;
+                    const char *hist;
+                    if (history_offset == 0) {
+                        hist = temp_buffer;
+                    } else {
+                        hist = history_get_back(history_offset);
+                    }
+
+                    if (hist == NULL) hist = "";
+
+                    printf("\r");
+                    printf("dummy_says> ");
+                    for (int i = 0; i < pos; i++) printf(" ");
+                    printf("\r");
+                    printf("dummy_says> %s", hist);
+                    strcpy(buffer, hist);
+                    pos = strlen(hist);
+                }
+            }
+        }
+        else if (c >= 32 && c < 127) {
+            /* Обычный символ */
+            if (pos < (int)max_len - 1) {
+                buffer[pos] = c;
+                pos++;
+                buffer[pos] = '\0';
+                printf("%c", c);
+                fflush(stdout);
+
+                /* Сохранить текущий буфер при редактировании */
+                strcpy(temp_buffer, buffer);
+                history_offset = 0;
+            }
+        }
+    }
+
+    /* Восстановить настройки терминала */
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+    return false;
+}
 
 /* ============================================================================
  * Утилиты для вывода и логирования
@@ -410,14 +715,14 @@ static bool soem_request_state(uint16_t state, uint32_t timeout_ms) {
 
     /* Запрос изменения состояния для всех slaves (0 = все) */
     ecx_context.slavelist[0].state = state;
-    ecx_writestate(&ecx_context, 0);
+    ecx_writestate(&ecx_context, 1);
 
     /* Ожидание достижения состояния */
     int wkc = ecx_statecheck(&ecx_context, 0, state, timeout_ms * 1000);
 
     if (wkc != ecx_context.slavecount) {
         printf("WARNING: Not all slaves reached %s state\n", state_name);
-        for (int i = 1; i <= ecx_context.slavecount; i++) {
+        for (int i = 0; i <= ecx_context.slavecount; i++) {
             if (ecx_context.slavelist[i].state != state) {
                 printf("  Slave %d: %s (expected %s)\n",
                        i,
@@ -704,6 +1009,30 @@ static void cmd_help(void) {
     printf("  motor-stop <idx>         - Emergency stop motor\n");
     printf("  motor-status <idx>       - Show motor status\n");
     printf("\n");
+    printf("Direct SOEM Function Calls:\n");
+    printf("  c-func <function> [args] - Call a SOEM library function directly\n");
+    printf("      c-func soem_init <ifname>\n");
+    printf("      c-func soem_cleanup\n");
+    printf("      c-func soem_scan_bus\n");
+    printf("      c-func soem_request_state <state> [timeout_ms]\n");
+    printf("          state: 0x01=INIT 0x02=PRE-OP 0x04=SAFE-OP 0x08=OPERATIONAL\n");
+    printf("          Example: c-func soem_request_state 0x02 5000\n");
+    printf("      c-func soem_start_pdo\n");
+    printf("      c-func soem_stop_pdo\n");
+    printf("      c-func soem_exchange_pdo\n");
+    printf("      c-func ecx_config_init\n");
+    printf("          Initialize SOEM configuration (call after soem_scan_bus).\n");
+    printf("          Shows detailed slave configuration and state information.\n");
+    printf("      c-func ecx_config_map_group\n");
+    printf("          Map PDO configuration and display detailed PDO mapping.\n");
+    printf("          Shows input/output byte counts, WKC values, and per-slave info.\n");
+    printf("\n");
+    printf("Command History (POSIX systems only):\n");
+    printf("  history              - Show all commands in history\n");
+    printf("  history clear        - Clear command history file\n");
+    printf("  UP/DOWN arrows       - Navigate through previous commands\n");
+    printf("                         (History is saved to ~/.ecat_cli_history)\n");
+    printf("\n");
 }
 
 /**
@@ -822,7 +1151,8 @@ static void cmd_write(int argc, char **argv) {
  *   я -> 0xC7
 
  * Возвращает код символа для дисплея или '?' если символ не найден
- */
+*/
+#if 0
 static uint8_t utf8_to_mt_display(const unsigned char *utf8, size_t *bytes_read) {
     *bytes_read = 1;
 
@@ -832,6 +1162,8 @@ static uint8_t utf8_to_mt_display(const unsigned char *utf8, size_t *bytes_read)
     }
     return '?';
 }
+#endif
+
 
 static void cmd_text_write(int argc, char **argv) {
     if (argc < 4) {
@@ -879,7 +1211,7 @@ static void cmd_text_write(int argc, char **argv) {
     //     i += bytes_read;
     // }
 
-    soem_write_data(slave_idx, addr, text, text_len);
+    soem_write_data(slave_idx, addr, (uint8_t*)text, text_len);
 
     free(data);
     free(text);
@@ -1065,6 +1397,7 @@ static void cmd_pdo_loop(int argc, char **argv) {
 #define STATE_SWITCHED_ON       3
 #define STATE_OPERATION_ENABLED 4
 #define STATE_FAULT             5
+#define STATE_QUICK_STOP_ACTIVE 6
 
 /* EM3E-556 PDO Mapping Structures */
 typedef struct __attribute__((__packed__)) {
@@ -1084,7 +1417,7 @@ typedef struct __attribute__((__packed__)) {
  */
 static int motor_em3e_556_get_state(uint16_t status_word) {
     uint16_t state_mask = status_word & 0x6F;
-    
+
     if ((state_mask & 0x4F) == 0x00) {
         return STATE_NOT_READY;
     } else if ((state_mask & 0x4F) == 0x40) {
@@ -1095,24 +1428,27 @@ static int motor_em3e_556_get_state(uint16_t status_word) {
         return STATE_SWITCHED_ON;
     } else if ((state_mask & 0x6F) == 0x27) {
         return STATE_OPERATION_ENABLED;
-    } else if ((state_mask & 0x08) != 0) {
+    } else if ((status_word & 0x08) != 0) {
         return STATE_FAULT;
+    } else if ((status_word & SW_QUICK_STOP) == 0) {
+        return STATE_QUICK_STOP_ACTIVE;
     }
-    
+
     return STATE_NOT_READY;
 }
 
 /**
  * Get state name
  */
-static const char* motor_em3e_556_state_name(int state) {
+const char* motor_em3e_556_state_name(int state) {
     switch (state) {
         case STATE_NOT_READY: return "Not Ready";
-        case STATE_SWITCH_ON_DISABLED: return "Switch On Disabled";
+        case STATE_SWITCH_ON_DISABLED: return "Switch on Disabled";
         case STATE_READY_TO_SWITCH_ON: return "Ready to Switch On";
         case STATE_SWITCHED_ON: return "Switched On";
         case STATE_OPERATION_ENABLED: return "Operation Enabled";
         case STATE_FAULT: return "Fault";
+        case STATE_QUICK_STOP_ACTIVE: return "Quick Stop Active";
         default: return "Unknown";
     }
 }
@@ -1133,17 +1469,22 @@ static bool motor_em3e_556_enable(int slave_idx) {
 
     /* Transition sequence */
     int max_attempts = 50;
-    
+
     for (int i = 0; i < max_attempts; i++) {
         soem_exchange_pdo();
-        
+
         int state = motor_em3e_556_get_state(inputs->status_word);
         printf("  State: %s (0x%04X)\r", motor_em3e_556_state_name(state), inputs->status_word);
-        fflush(stdout);
 
         if (state == STATE_OPERATION_ENABLED) {
             printf("\n✓ Drive enabled successfully\n");
             return true;
+
+        } else if (state == STATE_NOT_READY) {
+            outputs->control_word = 0;
+            printf("\n✗ Drive not ready. Waiting...\n");
+            usleep(100000);
+
         } else if (state == STATE_FAULT) {
             printf("\n✗ Drive in FAULT state. Resetting...\n");
             outputs->control_word = CW_FAULT_RESET;
@@ -1168,14 +1509,16 @@ static bool motor_em3e_556_enable(int slave_idx) {
             if (!fault_cleared) {
                 printf("  Failed to clear fault.\n");
             }
+        } else if (state == STATE_QUICK_STOP_ACTIVE) {
+            outputs->control_word = 0; // 0000h to transition to Switch on disabled
         } else if (state == STATE_SWITCH_ON_DISABLED) {
-            outputs->control_word = CW_ENABLE_VOLTAGE | CW_QUICK_STOP;
+            outputs->control_word = CW_ENABLE_VOLTAGE | CW_QUICK_STOP; // 0006h
         } else if (state == STATE_READY_TO_SWITCH_ON) {
-            outputs->control_word = CW_SWITCH_ON | CW_ENABLE_VOLTAGE | CW_QUICK_STOP;
+            outputs->control_word = CW_SWITCH_ON | CW_ENABLE_VOLTAGE | CW_QUICK_STOP; // 0007h
         } else if (state == STATE_SWITCHED_ON) {
-            outputs->control_word = CW_SWITCH_ON | CW_ENABLE_VOLTAGE | CW_QUICK_STOP | CW_ENABLE_OPERATION;
-        }
-        
+            outputs->control_word = CW_SWITCH_ON | CW_ENABLE_VOLTAGE | CW_QUICK_STOP | CW_ENABLE_OPERATION; // 000Fh
+        } // STATE_NOT_READY: do nothing, wait for auto-transition
+
 #ifdef _WIN32
         Sleep(50);
 #else
@@ -1196,11 +1539,11 @@ static bool motor_em3e_556_disable(int slave_idx) {
     }
 
     motor_em3e_556_outputs_t *outputs = (motor_em3e_556_outputs_t*)ecx_context.slavelist[slave_idx].outputs;
-    
+
     outputs->control_word = 0;
     outputs->target_velocity = 0;
     soem_exchange_pdo();
-    
+
     printf("Drive disabled\n");
     return true;
 }
@@ -1215,7 +1558,7 @@ static bool motor_em3e_556_set_mode(int slave_idx, int8_t mode) {
 
     /* Write Mode of Operation (0x6060) */
     int wkc = ecx_SDOwrite(&ecx_context, slave_idx, 0x6060, 0, FALSE, sizeof(mode), &mode, EC_TIMEOUTRXM);
-    
+
     if (wkc <= 0) {
         printf("ERROR: Failed to set operation mode\n");
         return false;
@@ -1228,7 +1571,7 @@ static bool motor_em3e_556_set_mode(int slave_idx, int8_t mode) {
         case MODE_HOMING: mode_name = "Homing"; break;
         case MODE_CYCLIC_SYNC_POS: mode_name = "Cyclic Sync Position"; break;
     }
-    
+
     printf("Operation mode set to: %s (%d)\n", mode_name, mode);
     return true;
 }
@@ -1242,9 +1585,9 @@ static bool motor_em3e_556_set_velocity(int slave_idx, int32_t velocity_rpm) {
     }
 
     motor_em3e_556_outputs_t *outputs = (motor_em3e_556_outputs_t*)ecx_context.slavelist[slave_idx].outputs;
-    
+
     outputs->target_velocity = velocity_rpm;
-    
+
     printf("Target velocity set to: %d RPM\n", velocity_rpm);
     return true;
 }
@@ -1259,11 +1602,11 @@ static void motor_em3e_556_print_status(int slave_idx) {
     }
 
     soem_exchange_pdo();
-    
+
     motor_em3e_556_inputs_t *inputs = (motor_em3e_556_inputs_t*)ecx_context.slavelist[slave_idx].inputs;
-    
+
     int state = motor_em3e_556_get_state(inputs->status_word);
-    
+
     printf("\n=== EM3E-556 Status (Slave %d) ===\n", slave_idx);
     printf("State:            %s\n", motor_em3e_556_state_name(state));
     printf("Status Word:      0x%04X\n", inputs->status_word);
@@ -1284,18 +1627,18 @@ static void motor_em3e_556_print_status(int slave_idx) {
  */
 static bool motor_em3e_556_run_timed(int slave_idx, int32_t velocity_rpm, int duration_sec) {
     printf("\n=== Running motor for %d seconds at %d RPM ===\n", duration_sec, velocity_rpm);
-    
+
     if (!motor_em3e_556_enable(slave_idx)) {
         return false;
     }
-    
+
     motor_em3e_556_set_velocity(slave_idx, velocity_rpm);
-    
+
     printf("Motor running");
     for (int i = 0; i < duration_sec; i++) {
         printf(".");
         fflush(stdout);
-        
+
         for (int j = 0; j < 10; j++) {
             soem_exchange_pdo();
 #ifdef _WIN32
@@ -1306,7 +1649,7 @@ static bool motor_em3e_556_run_timed(int slave_idx, int32_t velocity_rpm, int du
         }
     }
     printf(" Done!\n");
-    
+
     /* Stop motor */
     motor_em3e_556_set_velocity(slave_idx, 0);
     soem_exchange_pdo();
@@ -1315,9 +1658,9 @@ static bool motor_em3e_556_run_timed(int slave_idx, int32_t velocity_rpm, int du
 #else
     usleep(500000);
 #endif
-    
+
     motor_em3e_556_print_status(slave_idx);
-    
+
     return true;
 }
 
@@ -1330,15 +1673,15 @@ static bool motor_em3e_556_stop(int slave_idx) {
     }
 
     motor_em3e_556_outputs_t *outputs = (motor_em3e_556_outputs_t*)ecx_context.slavelist[slave_idx].outputs;
-    
+
     /* Stop: set velocity to 0 */
     outputs->target_velocity = 0;
-    
+
     /* Quick stop */
     outputs->control_word &= ~CW_QUICK_STOP;
-    
+
     soem_exchange_pdo();
-    
+
     printf("EMERGENCY STOP activated\n");
     return true;
 }
@@ -1351,7 +1694,7 @@ static void cmd_motor_enable(int argc, char **argv) {
         printf("Example: motor-enable 1\n");
         return;
     }
-    
+
     int slave_idx = atoi(argv[1]);
     motor_em3e_556_set_mode(slave_idx, MODE_PROFILE_VELOCITY);
     motor_em3e_556_enable(slave_idx);
@@ -1363,7 +1706,7 @@ static void cmd_motor_disable(int argc, char **argv) {
         printf("Example: motor-disable 1\n");
         return;
     }
-    
+
     int slave_idx = atoi(argv[1]);
     motor_em3e_556_disable(slave_idx);
 }
@@ -1374,11 +1717,11 @@ static void cmd_motor_run(int argc, char **argv) {
         printf("Example: motor-run 1 100 10   (run at 100 RPM for 10 seconds)\n");
         return;
     }
-    
+
     int slave_idx = atoi(argv[1]);
     int32_t velocity = atoi(argv[2]);
     int duration = atoi(argv[3]);
-    
+
     motor_em3e_556_run_timed(slave_idx, velocity, duration);
 }
 
@@ -1389,10 +1732,10 @@ static void cmd_motor_velocity(int argc, char **argv) {
         printf("  Positive = forward, Negative = reverse\n");
         return;
     }
-    
+
     int slave_idx = atoi(argv[1]);
     int32_t velocity = atoi(argv[2]);
-    
+
     motor_em3e_556_set_velocity(slave_idx, velocity);
 }
 
@@ -1402,7 +1745,7 @@ static void cmd_motor_stop(int argc, char **argv) {
         printf("Example: motor-stop 1\n");
         return;
     }
-    
+
     int slave_idx = atoi(argv[1]);
     motor_em3e_556_stop(slave_idx);
 }
@@ -1413,9 +1756,267 @@ static void cmd_motor_status(int argc, char **argv) {
         printf("Example: motor-status 1\n");
         return;
     }
-    
+
     int slave_idx = atoi(argv[1]);
     motor_em3e_556_print_status(slave_idx);
+}
+
+/* ============================================================================
+ * cmd_c_funcs — прямой вызов функций SOEM из интерактивного интерфейса
+ *
+ * Синтаксис:
+ *   c-func <имя_функции> [аргумент1] [аргумент2] ...
+ *
+ * Поддерживаемые функции:
+ *   soem_init <ifname>               - Инициализировать SOEM на интерфейсе
+ *   soem_cleanup                     - Освободить ресурсы SOEM
+ *   soem_scan_bus                    - Сканировать EtherCAT шину
+ *   soem_request_state <state> [timeout_ms]
+ *                                    - Перевести все slaves в указанное состояние
+ *                                      state: 0x01=INIT, 0x02=PRE-OP,
+ *                                             0x04=SAFE-OP, 0x08=OPERATIONAL
+ *                                      timeout_ms: таймаут в мс (по умолч. 5000)
+ *                                      Пример: c-func soem_request_state 0x02 5000
+ *   soem_start_pdo                   - Запустить PDO обмен (→ OPERATIONAL)
+ *   soem_stop_pdo                    - Остановить PDO обмен (→ INIT)
+ *   soem_exchange_pdo                - Одиночный PDO обмен (send+receive)
+ * ============================================================================ */
+
+static void cmd_c_funcs(int argc, char **argv) {
+    if (argc < 2) {
+        printf("Usage: c-func <function_name> [args...]\n");
+        printf("\n");
+        printf("Available SOEM functions:\n");
+        printf("  soem_init <ifname>\n");
+        printf("      Initialize SOEM on a network interface.\n");
+        printf("      Example: c-func soem_init eth0\n");
+        printf("\n");
+        printf("  soem_cleanup\n");
+        printf("      Release all SOEM resources.\n");
+        printf("      Example: c-func soem_cleanup\n");
+        printf("\n");
+        printf("  soem_scan_bus\n");
+        printf("      Scan the EtherCAT bus and list discovered slaves.\n");
+        printf("      Example: c-func soem_scan_bus\n");
+        printf("\n");
+        printf("  soem_request_state <state> [timeout_ms]\n");
+        printf("      Request all slaves to transition to <state>.\n");
+        printf("      state values (hex or decimal):\n");
+        printf("        0x01  INIT\n");
+        printf("        0x02  PRE-OP\n");
+        printf("        0x04  SAFE-OP\n");
+        printf("        0x08  OPERATIONAL\n");
+        printf("      timeout_ms defaults to 5000 if omitted.\n");
+        printf("      Example: c-func soem_request_state 0x02 5000\n");
+        printf("      Example: c-func soem_request_state 0x08\n");
+        printf("\n");
+        printf("  soem_start_pdo\n");
+        printf("      Start PDO exchange (transitions slaves to OPERATIONAL).\n");
+        printf("      Example: c-func soem_start_pdo\n");
+        printf("\n");
+        printf("  soem_stop_pdo\n");
+        printf("      Stop PDO exchange (transitions slaves to INIT).\n");
+        printf("      Example: c-func soem_stop_pdo\n");
+        printf("\n");
+        printf("  soem_exchange_pdo\n");
+        printf("      Perform a single PDO send/receive cycle.\n");
+        printf("      Example: c-func soem_exchange_pdo\n");
+        printf("\n");
+        printf("  ecx_config_init\n");
+        printf("      Initialize SOEM configuration (must call after soem_scan_bus).\n");
+        printf("      Example: c-func ecx_config_init\n");
+        printf("\n");
+        printf("  ecx_config_map_group\n");
+        printf("      Map PDO configuration for group 0 and show mapping info.\n");
+        printf("      Example: c-func ecx_config_map_group\n");
+        return;
+    }
+
+    const char *func_name = argv[1];
+
+    /* ------------------------------------------------------------------ */
+    /* soem_init <ifname>                                                  */
+    /* ------------------------------------------------------------------ */
+    if (strcmp(func_name, "soem_init") == 0) {
+        if (argc < 3) {
+            printf("ERROR: soem_init requires an interface name.\n");
+            printf("Usage: c-func soem_init <ifname>\n");
+            return;
+        }
+        const char *ifname = argv[2];
+        printf("Calling soem_init(\"%s\")...\n", ifname);
+        bool ok = soem_init(ifname);
+        printf("Result: %s\n", ok ? "true (success)" : "false (failure)");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* soem_cleanup                                                        */
+    /* ------------------------------------------------------------------ */
+    else if (strcmp(func_name, "soem_cleanup") == 0) {
+        printf("Calling soem_cleanup()...\n");
+        soem_cleanup();
+        printf("Result: done\n");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* soem_scan_bus                                                       */
+    /* ------------------------------------------------------------------ */
+    else if (strcmp(func_name, "soem_scan_bus") == 0) {
+        printf("Calling soem_scan_bus()...\n");
+        soem_scan_bus();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* soem_request_state <state> [timeout_ms]                            */
+    /* ------------------------------------------------------------------ */
+    else if (strcmp(func_name, "soem_request_state") == 0) {
+        if (argc < 3) {
+            printf("ERROR: soem_request_state requires a state argument.\n");
+            printf("Usage: c-func soem_request_state <state> [timeout_ms]\n");
+            printf("  state:      0x01=INIT  0x02=PRE-OP  0x04=SAFE-OP  0x08=OPERATIONAL\n");
+            printf("  timeout_ms: milliseconds to wait (default: 5000)\n");
+            return;
+        }
+
+        uint16_t state      = (uint16_t)strtoul(argv[2], NULL, 0);
+        uint32_t timeout_ms = (argc >= 4) ? (uint32_t)strtoul(argv[3], NULL, 0) : 5000u;
+
+        /* Человекочитаемое имя состояния */
+        const char *state_name = state_to_string(state);
+
+        printf("Calling soem_request_state(state=0x%02X (%s), timeout_ms=%u)...\n",
+               state, state_name, timeout_ms);
+
+        bool ok = soem_request_state(state, timeout_ms);
+        printf("Result: %s\n", ok ? "true (all slaves reached state)" : "false (timeout or partial)");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* soem_start_pdo                                                      */
+    /* ------------------------------------------------------------------ */
+    else if (strcmp(func_name, "soem_start_pdo") == 0) {
+        printf("Calling soem_start_pdo()...\n");
+        bool ok = soem_start_pdo();
+        printf("Result: %s\n", ok ? "true (PDO exchange started)" : "false (failure)");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* soem_stop_pdo                                                       */
+    /* ------------------------------------------------------------------ */
+    else if (strcmp(func_name, "soem_stop_pdo") == 0) {
+        printf("Calling soem_stop_pdo()...\n");
+        soem_stop_pdo();
+        printf("Result: done\n");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* soem_exchange_pdo                                                   */
+    /* ------------------------------------------------------------------ */
+    else if (strcmp(func_name, "soem_exchange_pdo") == 0) {
+        printf("Calling soem_exchange_pdo()...\n");
+        bool ok = soem_exchange_pdo();
+        printf("Result: %s\n", ok ? "true (WKC ok)" : "false (WKC mismatch or inactive)");
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* ecx_config_init                                                     */
+    /* ------------------------------------------------------------------ */
+    else if (strcmp(func_name, "ecx_config_init") == 0) {
+        if (!soem_initialized) {
+            printf("ERROR: SOEM not initialized. Run 'c-func soem_init <ifname>' first.\n");
+            return;
+        }
+
+        printf("Calling ecx_config_init(&ecx_context)...\n");
+
+        int result = ecx_config_init(&ecx_context);
+        printf("\nConfiguration initialization result:\n");
+        printf("  Return code: %d\n", result);
+        printf("  Total slaves: %d\n", ecx_context.slavecount);
+
+        /* Show details about each slave */
+        printf("\nSlave details:\n");
+        for (int i = 1; i <= ecx_context.slavecount; i++) {
+            printf("  Slave %d:\n", i);
+            printf("    Name: %s\n", ecx_context.slavelist[i].name);
+            printf("    Product ID: 0x%08X\n", ecx_context.slavelist[i].eep_id);
+            printf("    Vendor ID: 0x%08X\n", ecx_context.slavelist[i].eep_man);
+            printf("    Config address: 0x%04X\n", ecx_context.slavelist[i].configadr);
+            printf("    Input size: %d bits\n", ecx_context.slavelist[i].Ibits);
+            printf("    Output size: %d bits\n", ecx_context.slavelist[i].Obits);
+            printf("    State: %s (0x%02X)\n",
+                   state_to_string(ecx_context.slavelist[i].state),
+                   ecx_context.slavelist[i].state);
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* ecx_config_map_group                                                */
+    /* ------------------------------------------------------------------ */
+    else if (strcmp(func_name, "ecx_config_map_group") == 0) {
+        if (!soem_initialized) {
+            printf("ERROR: SOEM not initialized. Run 'c-func soem_init <ifname>' first.\n");
+            return;
+        }
+
+        if (ecx_context.slavecount == 0) {
+            printf("ERROR: No slaves found. Run 'c-func soem_scan_bus' first.\n");
+            return;
+        }
+
+        printf("Calling ecx_config_map_group(&ecx_context, (void*)IOmap, 0)...\n");
+
+        int result = ecx_config_map_group(&ecx_context, (void*)IOmap, 0);
+
+        printf("\nPDO Mapping result:\n");
+        printf("  Return code: %d (bytes mapped)\n", result);
+        printf("  IO map buffer size: %d bytes\n", MAX_IO_MAP_SIZE);
+
+        /* Display PDO group information */
+        printf("\nGroup 0 PDO Mapping:\n");
+        printf("  Input bytes (Ibytes): %d\n", ecx_context.grouplist[0].Ibytes);
+        printf("  Output bytes (Obytes): %d\n", ecx_context.grouplist[0].Obytes);
+        printf("  Input WKC: %d\n", ecx_context.grouplist[0].inputsWKC);
+        printf("  Output WKC: %d\n", ecx_context.grouplist[0].outputsWKC);
+        printf("  Expected WKC: %d\n",
+               (ecx_context.grouplist[0].outputsWKC * 2) + ecx_context.grouplist[0].inputsWKC);
+
+        /* Display per-slave PDO information */
+        printf("\nPDO mapping per slave:\n");
+        for (int i = 1; i <= ecx_context.slavecount; i++) {
+            printf("  Slave %d (%s):\n", i, ecx_context.slavelist[i].name);
+            printf("    Input offset: %d bytes, %d bits\n",
+                   ecx_context.slavelist[i].Ibytes,
+                   ecx_context.slavelist[i].Ibits);
+            printf("    Output offset: %d bytes, %d bits\n",
+                   ecx_context.slavelist[i].Obytes,
+                   ecx_context.slavelist[i].Obits);
+
+            /* Show CoE (CANopen over EtherCAT) details if available */
+            if (ecx_context.slavelist[i].CoEdetails != 0) {
+                printf("    CoE support: yes\n");
+            }
+        }
+
+        printf("\nTotal IO mapping:\n");
+        printf("  Input data size: %d bytes\n", ecx_context.grouplist[0].Ibytes);
+        printf("  Output data size: %d bytes\n", ecx_context.grouplist[0].Obytes);
+        printf("  Total PDO size: %d bytes\n",
+               ecx_context.grouplist[0].Ibytes + ecx_context.grouplist[0].Obytes);
+        hex_dump_print((const uint8_t*)&IOmap, result, "IOmap");
+    }
+    // char *ecx_elist2string(ecx_contextt *context) Look up error in ec_errorlist and convert to text string.
+    else if (strcmp(func_name, "ecx_elist2string") == 0) {
+        printf(ecx_elist2string(&ecx_context));
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Неизвестная функция                                                 */
+    /* ------------------------------------------------------------------ */
+    else {
+        printf("ERROR: Unknown SOEM function '%s'.\n", func_name);
+        printf("Type 'c-func' without arguments to see available functions.\n");
+    }
 }
 
 /* ============================================================================
@@ -1511,6 +2112,17 @@ static bool process_command(char *line) {
     else if (strcmp(argv[0], "motor-status") == 0) {
         cmd_motor_status(argc, argv);
     }
+    else if (strcmp(argv[0], "c-func") == 0)
+    {
+        cmd_c_funcs(argc, argv);
+    }
+    else if (strcmp(argv[0], "history") == 0) {
+        if (argc > 1 && strcmp(argv[1], "clear") == 0) {
+            history_clear();
+        } else {
+            history_show();
+        }
+    }
     else {
         printf("ERROR: Unknown command '%s'. Type 'help' for list of commands.\n", argv[0]);
     }
@@ -1519,19 +2131,24 @@ static bool process_command(char *line) {
 }
 
 /**
- * Главный цикл REPL
+ * Главный цикл REPL с поддержкой истории команд
  */
 static void repl_loop(void) {
     char line[MAX_COMMAND_LEN];
 
+    /* Загрузить историю при старте */
+    history_load();
+
     printf("\nEtherCAT CLI - Interactive Mode\n");
-    printf("Type 'help' for commands, 'quit' to exit\n\n");
+    printf("Type 'help' for commands, 'quit' to exit\n");
+    printf("Use UP/DOWN arrows to navigate command history\n\n");
 
     while (1) {
         printf("dummy_says> ");
         fflush(stdout);
 
-        if (fgets(line, sizeof(line), stdin) == NULL) {
+        /* Используем функцию с поддержкой истории */
+        if (!read_line_with_history(line, sizeof(line))) {
             break;  /* EOF или ошибка */
         }
 
@@ -1544,6 +2161,9 @@ static void repl_loop(void) {
         if (len == 0) {
             continue;  /* Пустая строка */
         }
+
+        /* Добавить в историю (и сохранить в файл) */
+        history_add(line);
 
         if (!process_command(line)) {
             break;  /* Команда quit/exit */
@@ -1579,7 +2199,7 @@ int main(int argc, char *argv[]) {
     const char *nic_iface = NULL;
 
     printf("=== EtherCAT CLI Tool ===\n");
-    printf("Version 1.0 (SOEM 2.0)\n\n");
+    printf("Version 1.1 (SOEM 2.0)\n\n");
 
     /* Инициализация context structure */
     // memset(&ecx_context, 0, sizeof(ecx_context));

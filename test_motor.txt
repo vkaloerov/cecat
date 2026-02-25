@@ -1,0 +1,45 @@
+# EM3E-556 Test Script
+# Copy and paste these commands into dummy-ecat-cli
+
+# === Test 1: Basic Connection ===
+scan
+pdo-start
+status
+
+# === Test 2: Enable Drive ===
+motor-enable 1
+motor-status 1
+
+# === Test 3: Run Forward 5 seconds at 100 RPM ===
+motor-run 1 100 5
+
+# === Test 4: Manual Velocity Control ===
+motor-velocity 1 50
+# Wait 3 seconds...
+motor-velocity 1 150
+# Wait 3 seconds...
+motor-velocity 1 200
+# Wait 3 seconds...
+
+# === Test 5: Change Direction ===
+motor-velocity 1 -100
+# Wait 3 seconds...
+motor-velocity 1 -200
+# Wait 3 seconds...
+
+# === Test 6: Emergency Stop ===
+motor-stop 1
+motor-status 1
+
+# === Test 7: Restart Motor ===
+motor-velocity 1 100
+# Wait 5 seconds...
+motor-stop 1
+
+# === Test 8: Check Status ===
+motor-status 1
+
+# === Test 9: Disable and Exit ===
+motor-disable 1
+status
+exit
