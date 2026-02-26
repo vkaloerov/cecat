@@ -46,15 +46,95 @@
 static char IOmap[MAX_IO_MAP_SIZE];  /* Буфер для I/O mapping */
 static bool soem_initialized = false; /* Флаг инициализации SOEM */
 static bool verbose_mode = false;     /* Флаг verbose режима */
-static char interface_name[64] = "";  /* Имя сетевого интерфейса */
+static char interface_name[128] = "";  /* Имя сетевого интерфейса */
 static bool pdo_active = false;       /* Флаг активности PDO обмена */
 static volatile bool pdo_running = false; /* Флаг работы PDO цикла */
+static unsigned int expectedWKC = 0;
 
 /* SOEM 2.0 context structure */
 static ecx_contextt ecx_context;
 
-/* Forward declaration for log_verbose */
-static void log_verbose(const char *format, ...);
+
+/*
+ * Структура для взаимодействия с PDO Leadshine EM3E-556
+ */
+OSAL_PACKED_BEGIN
+typedef struct OSAL_PACKED
+{
+    struct
+    {
+        uint16_t ControlWord;
+        uint32_t ProfileTargetPosition;
+        uint16_t TouchProbeFunction;
+    } outputs;
+    struct
+    {
+        uint16_t LastErrorCode;
+        uint16_t StatusWord;
+        int8_t ModesOfOperationDisplay;
+        int32_t ActualPosition;
+        uint16_t TouchProbeStatus;
+        int32_t TouchProbe1PositiveValue;
+        uint32_t DigitalInputStatus;
+
+    } inputs;
+} process_data_t;
+OSAL_PACKED_END
+
+/* ============================================================================
+ * Утилиты для вывода и логирования
+ * ============================================================================ */
+
+/**
+ * Вывод verbose сообщения (только если включен verbose режим)
+ */
+static void log_verbose(const char *format, ...) {
+    if (!verbose_mode) return;
+
+    va_list args;
+    va_start(args, format);
+    printf("[VERBOSE] ");
+    vprintf(format, args);
+    printf("\n");
+    va_end(args);
+}
+
+/**
+ * Вывод ошибки с детальной информацией из SOEM
+ */
+static void print_error(const char *context) {
+    printf("ERROR: %s\n", context);
+    if (ecx_iserror(&ecx_context)) {
+        char *err_str = ecx_elist2string(&ecx_context);
+        if (err_str && err_str[0] != '\0') {
+            printf("  SOEM Error: %s\n", err_str);
+        }
+    }
+}
+
+/**
+ * Вывод шестнадцатеричного дампа данных
+ */
+static void print_hex_dump(const uint8_t *data, size_t len) {
+    for (size_t i = 0; i < len; i++) {
+        printf("%02X ", data[i]);
+        if ((i + 1) % 16 == 0) printf("\n");
+    }
+    if (len % 16 != 0) printf("\n");
+}
+
+/**
+ * Преобразование состояния slave в строку
+ */
+static const char* state_to_string(uint16_t state) {
+    switch(state) {
+        case 0x01: return "INIT";
+        case 0x02: return "PRE-OP";
+        case 0x04: return "SAFE-OP";
+        case 0x08: return "OPERATIONAL";
+        default: return "UNKNOWN";
+    }
+}
 
 /* ============================================================================
  * История команд (Command History) - POSIX реализация с сохранением в файл
@@ -259,6 +339,10 @@ static bool read_line_with_history(char *buffer, size_t max_len) {
     int history_offset = 0;  /* 0 = текущая строка, 1 = последняя команда и т.д. */
     char temp_buffer[MAX_COMMAND_LEN];
     strcpy(temp_buffer, "");
+    const char *prompt = "CLI> ";
+
+    printf("%s", prompt);
+    fflush(stdout);
 
     while (1) {
         unsigned char c;
@@ -300,14 +384,17 @@ static bool read_line_with_history(char *buffer, size_t max_len) {
                     continue;
                 }
 
-                /* Очистить текущую строку и показать историческую */
+                /* Переместить курсор в начало строки и очистить */
                 printf("\r");
-                printf("dummy_says> ");
+                //printf("%s", prompt);
+                /* Очистить остатки старого текста */
                 for (int i = 0; i < pos; i++) printf(" ");
-                printf("\r");
-                printf("dummy_says> %s", hist);
+                fflush(stdout);
+                /* Вернуть курсор и вывести новую команду */
+                printf("\r%s%s", prompt, hist);
                 strcpy(buffer, hist);
-                pos = strlen(hist);
+                pos = strlen(prompt) + strlen(hist);
+                fflush(stdout);
             }
             else if (seq[1] == 'B') {
                 /* DOWN arrow - показать следующую команду или текущую */
@@ -322,13 +409,16 @@ static bool read_line_with_history(char *buffer, size_t max_len) {
 
                     if (hist == NULL) hist = "";
 
+                    /* Переместить курсор в начало строки и очистить */
                     printf("\r");
-                    printf("dummy_says> ");
+                    //printf("%s", prompt);
+                    /* Очистить остатки старого текста */
                     for (int i = 0; i < pos; i++) printf(" ");
-                    printf("\r");
-                    printf("dummy_says> %s", hist);
+                    /* Вернуть курсор и вывести новую команду */
+                    printf("\r%s%s", prompt, hist);
                     strcpy(buffer, hist);
-                    pos = strlen(hist);
+                    pos = strlen(prompt) + strlen(hist);
+                    fflush(stdout);
                 }
             }
         }
@@ -351,61 +441,6 @@ static bool read_line_with_history(char *buffer, size_t max_len) {
     /* Восстановить настройки терминала */
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
     return false;
-}
-
-/* ============================================================================
- * Утилиты для вывода и логирования
- * ============================================================================ */
-
-/**
- * Вывод verbose сообщения (только если включен verbose режим)
- */
-static void log_verbose(const char *format, ...) {
-    if (!verbose_mode) return;
-
-    va_list args;
-    va_start(args, format);
-    printf("[VERBOSE] ");
-    vprintf(format, args);
-    printf("\n");
-    va_end(args);
-}
-
-/**
- * Вывод ошибки с детальной информацией из SOEM
- */
-static void print_error(const char *context) {
-    printf("ERROR: %s\n", context);
-    if (ecx_iserror(&ecx_context)) {
-        char *err_str = ecx_elist2string(&ecx_context);
-        if (err_str && err_str[0] != '\0') {
-            printf("  SOEM Error: %s\n", err_str);
-        }
-    }
-}
-
-/**
- * Вывод шестнадцатеричного дампа данных
- */
-static void print_hex_dump(const uint8_t *data, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        printf("%02X ", data[i]);
-        if ((i + 1) % 16 == 0) printf("\n");
-    }
-    if (len % 16 != 0) printf("\n");
-}
-
-/**
- * Преобразование состояния slave в строку
- */
-static const char* state_to_string(uint16_t state) {
-    switch(state) {
-        case 0x01: return "INIT";
-        case 0x02: return "PRE-OP";
-        case 0x04: return "SAFE-OP";
-        case 0x08: return "OPERATIONAL";
-        default: return "UNKNOWN";
-    }
 }
 
 /* ============================================================================
@@ -433,8 +468,7 @@ static bool soem_init(const char *ifname) {
         return false;
     }
 
-    strncpy(interface_name, ifname, sizeof(interface_name) - 1);
-    interface_name[sizeof(interface_name) - 1] = '\0';
+    strcpy(interface_name, ifname);
     soem_initialized = true;
     log_verbose("SOEM initialized successfully");
 
@@ -467,7 +501,12 @@ static void soem_scan_bus(void) {
     }
 
     /* Mapping процесс данных */
-    ecx_config_map_group(&ecx_context, &IOmap, 0);
+    unsigned short sz = ecx_config_map_group(&ecx_context, &IOmap, 0);
+    if (sz > MAX_IO_MAP_SIZE) {
+        print_error("I/O mapping failed");
+        return;
+    }
+
     log_verbose("I/O mapping completed");
 
     /* Вывод информации об обнаруженных slaves */
@@ -478,6 +517,64 @@ static void soem_scan_bus(void) {
         printf("No slaves detected.\n");
         return;
     }
+    expectedWKC = ecx_context.grouplist[0].outputsWKC * 2 + ecx_context.grouplist[0].inputsWKC;
+
+    // как указано в документации пора попробовать установить DC
+    ecx_configdc(&ecx_context);
+
+    // проверяем что все наши инициализации привели к тому что статус у слейвов теперь SAFE_OP
+    uint16_t currentState = ecx_statecheck(&ecx_context, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
+    if (currentState != EC_STATE_SAFE_OP) {
+        printf("Failed to set init bus. Current fieldbus slaves BITWISE OR state: %s\n", state_to_string(currentState));
+        return;
+    }
+    log_verbose("Init bus completed successfully");
+
+    /* Перед тем как перейти в OPERATIONAL стейт необходимо проверить что слейвы имеют валидные
+       process data для этого отправляем и получаем их */
+    ecx_send_processdata(&ecx_context);
+    ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+    /* Finally, the operational state can be requested through ecx_writestate() using slave 0,
+       which will broadcast the request to all slaves on the network */
+    ecx_context.slavelist[0].state = EC_STATE_OPERATIONAL;
+    ecx_writestate(&ecx_context, 0);
+
+    uint16_t chk = 200;
+    /* wait for all slaves to reach OP state */
+    do
+    {
+       ecx_send_processdata(&ecx_context);
+       ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+       ecx_statecheck(&ecx_context, 0, EC_STATE_OPERATIONAL, 50000);
+    } while (chk-- && (ecx_context.slavelist[0].state != EC_STATE_OPERATIONAL));
+    if (ecx_context.slavelist[0].state != EC_STATE_OPERATIONAL)
+    {
+       /* ERROR */
+       printf("Failed to move slaves to operational state\n");
+       printf("Current fieldbus slaves BITWISE OR state: %s\n", state_to_string(ecx_context.slavelist[0].state));
+    }
+
+     log_verbose("Slave initialization completed successfully, OPERATIONAL state reached");
+
+     process_data_t *pd = (process_data_t *)IOmap;
+     /* print inputs of pd
+      * LastErrorCode;
+      * StatusWord;
+      * ModesOfOperationDisplay;
+      * ActualPosition;
+      * TouchProbeStatus;
+      * TouchProbe1PositiveValue;
+      * DigitalInputStatus;
+      */
+     printf("Inputs of pd of EM3E-556: \n");
+     printf("LastErrorCode: %d\n", pd->inputs.LastErrorCode);
+     printf("StatusWord: %d\n", pd->inputs.StatusWord);
+     printf("ModesOfOperationDisplay: %d\n", pd->inputs.ModesOfOperationDisplay);
+     printf("ActualPosition: %d\n", pd->inputs.ActualPosition);
+     printf("TouchProbeStatus: %d\n", pd->inputs.TouchProbeStatus);
+     printf("TouchProbe1PositiveValue: %d\n", pd->inputs.TouchProbe1PositiveValue);
+     printf("DigitalInputStatus: %u\n", pd->inputs.DigitalInputStatus);
+
 
     /* Заголовок таблицы */
     printf("%-5s %-20s %-10s %-10s %-15s\n",
@@ -714,26 +811,24 @@ static bool soem_request_state(uint16_t state, uint32_t timeout_ms) {
     log_verbose("Requesting state %s for all slaves", state_name);
 
     /* Запрос изменения состояния для всех slaves (0 = все) */
-    ecx_context.slavelist[0].state = state;
-    ecx_writestate(&ecx_context, 1);
-
-    /* Ожидание достижения состояния */
-    int wkc = ecx_statecheck(&ecx_context, 0, state, timeout_ms * 1000);
-
-    if (wkc != ecx_context.slavecount) {
-        printf("WARNING: Not all slaves reached %s state\n", state_name);
-        for (int i = 0; i <= ecx_context.slavecount; i++) {
-            if (ecx_context.slavelist[i].state != state) {
-                printf("  Slave %d: %s (expected %s)\n",
-                       i,
-                       state_to_string(ecx_context.slavelist[i].state),
-                       state_name);
-            }
-        }
-        return false;
+    for (int i = 1; i <= ecx_context.slavecount; i++) {
+        ecx_context.slavelist[i].state = state;
+        ecx_writestate(&ecx_context, i);
     }
 
-    log_verbose("All slaves reached %s state", state_name);
+
+    bool all_slaves_reached_state = true;
+    for (int i = 1; i <= ecx_context.slavecount; i++) {
+        uint16_t slave_state = ecx_statecheck(&ecx_context, i, state, timeout_ms * 1000);
+        if (state != slave_state){
+            printf("WARNING: Slave %d: %s (expected %s)\n", i, state_to_string(slave_state), state_name);
+            all_slaves_reached_state = false;
+        }
+    }
+    if (!all_slaves_reached_state)
+        log_verbose("NOT ALL SLAVES REACHED %s STATE SEE OUTPUT ABOVE", state_name);
+
+
     return true;
 }
 
@@ -2144,8 +2239,8 @@ static void repl_loop(void) {
     printf("Use UP/DOWN arrows to navigate command history\n\n");
 
     while (1) {
-        printf("dummy_says> ");
-        fflush(stdout);
+        // printf("dummy_says> ");
+        // fflush(stdout);
 
         /* Используем функцию с поддержкой истории */
         if (!read_line_with_history(line, sizeof(line))) {
