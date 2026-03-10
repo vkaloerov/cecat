@@ -17,6 +17,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+unsigned int out_copy_chars(char *output, size_t output_len, const char *data, int current_pos, size_t data_size, int shift);
+
 /**
  * Вывести hex dump данных в stdout
  *

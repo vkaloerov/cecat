@@ -18,6 +18,7 @@
 #include <stdbool.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <time.h>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -32,6 +33,9 @@
 
 #include "soem/soem.h"
 #include "my_hex_dump.h"
+
+
+static const char wap_text[] = {"LOREM_IPSUM_DOLOR_SIT_AMET_CONSECTETUER_ADIPISCING_ELIT._AENEAN_COMMODO_LIGULA_EGET_DOLOR._AENEAN_MASSA._CUM_SOCIIS_NATOQUE_PENATIBUS_ET_MAGNIS_DIS_PARTURIENT_MONTES_NASCETUR_RIDICULUS_MUS._DONEC_QUAM_FELIS_ULTRICIES_NEC_PELLENTESQUE_EU_PRETIUM_QUIS_SEM._NULLA_CONSEQUAT_MASSA_QUIS_ENIM._DONEC_PEDE_JUSTO_FRINGILLA_VEL_ALIQUET_NEC_VULPUTATE_EGET_ARCU._IN_ENIM_JUSTO_RHONCUS_UT_IMPERDIET_A_VENENATIS_VITAE_JUSTO._NULLAM_DICTUM_FELIS_EU_PEDE_MOLLIS_PRETIUM._INTEGER_TINCIDUNT._CRAS_DAPIBUS._VIVAMUS_ELEMENTUM_SEMPER_NISI._AENEAN_VULPUTATE_ELEIFEND_TELLUS._AENEAN_LEO_LIGULA_PORTTITOR_EU_CONSEQUAT_VITAE_ELEIFEND_AC_ENIM._ALIQUAM_LOREM_ANTE_DAPIBUS_IN_VIVERRA_QUIS_FEUGIAT_A_TELLUS._PHASELLUS_VIVERRA_NULLA_UT_METUS_VARIUS_LAOREET._QUISQUE_RUTRUM._AENEAN_IMPERDIET._ETIAM_ULTRICIES_NISI_VEL_AUGUE._CURABITUR_ULLAMCORPER_ULTRICIES_NISI._NAM_EGET_DUI._ETIAM_RHONCUS._MAECENAS_TEMPUS_TELLUS_EGET_CONDIMENTUM_RHONCUS_SEM_QUAM_SEMPER_LIBERO_SIT_AMET_ADIPISCING_SEM_NEQUE_SED_IPSUM._NAM_QUAM_NUNC_BLANDIT_VEL_LUCTUS_PULVINAR_HENDRERIT_ID_LOREM._MAECENAS_NEC_ODIO_ET_ANTE_TINCIDUNT_TEMPUS._DONEC_VITAE_SAPIEN_UT_LIBERO_VENENATIS_FAUCIBUS._NULLAM_QUIS_ANTE._ETIAM_SIT_AMET_ORCI_EGET_EROS_FAUCIBUS_TINCIDUNT._DUIS_LEO._SED_FRINGILLA_MAURIS_SIT_AMET_NIBH._DONEC_SODALES_SAGITTIS_MAGNA._SED_CONSEQUAT_LEO_EGET_BIBENDUM_SODALES_AUGUE_VELIT_CURSUS_NUNC_QUIS_GRAVIDA_MAGNA_MI_A_LIBERO._FUSCE_VULPUTATE_ELEIFEND_SAPIEN._VESTIBULUM_PURUS_QUAM_SCELERISQUE_UT_MOLLIS_SED_NONUMMY_ID_METUS._NULLAM_ACCUMSAN_LOREM_IN_DUI._CRAS_ULTRICIES_MI_EU_TURPIS_HENDRERIT_FRINGILLA._VESTIBULUM_ANTE_IPSUM_PRIMIS_IN_FAUCIBUS_ORCI_LUCTUS_ET_ULTRICES_POSUERE_CUBILIA_CURAE;_IN_AC_DUI_QUIS_MI_CONSECTETUER_LACINIA._NAM_PRETIUM_TURPIS_ET"};
 
 /* ============================================================================
  * Глобальные переменные для состояния SOEM
@@ -58,28 +62,94 @@ static ecx_contextt ecx_context;
 /*
  * Структура для взаимодействия с PDO Leadshine EM3E-556
  */
+#if 1
+#include <stdint.h>
+
 OSAL_PACKED_BEGIN
 typedef struct OSAL_PACKED
 {
-    struct
-    {
-        uint16_t ControlWord;
-        uint32_t ProfileTargetPosition;
-        uint16_t TouchProbeFunction;
+    struct  OSAL_PACKED {
+        uint8_t _1_display; /* addr 0x0000, slave DC_Device */
+        uint8_t _2_display; /* addr 0x0001, slave DC_Device */
+        uint8_t _3_display; /* addr 0x0002, slave DC_Device */
+        uint8_t _4_display; /* addr 0x0003, slave DC_Device */
+        uint8_t _5_display; /* addr 0x0004, slave DC_Device */
+        uint8_t _6_display; /* addr 0x0005, slave DC_Device */
+        uint8_t _7_display; /* addr 0x0006, slave DC_Device */
+        uint8_t _8_display; /* addr 0x0007, slave DC_Device */
+        uint8_t _9_display; /* addr 0x0008, slave DC_Device */
+        uint8_t _10_display; /* addr 0x0009, slave DC_Device */
+        uint8_t _11_display; /* addr 0x000A, slave DC_Device */
+        uint8_t _12_display; /* addr 0x000B, slave DC_Device */
+        uint8_t _13_display; /* addr 0x000C, slave DC_Device */
+        uint8_t _14_display; /* addr 0x000D, slave DC_Device */
+        uint8_t _15_display; /* addr 0x000E, slave DC_Device */
+        uint8_t _16_display; /* addr 0x000F, slave DC_Device */
+        uint32_t Target_pos; /* addr 0x0010, slave DC_Device */
+        uint32_t Max_speed; /* addr 0x0014, slave DC_Device */
+        uint32_t Relays; /* addr 0x0018, slave DC_Device */
     } outputs;
-    struct
-    {
-        uint16_t LastErrorCode;
-        uint16_t StatusWord;
-        int8_t ModesOfOperationDisplay;
-        int32_t ActualPosition;
-        uint16_t TouchProbeStatus;
-        int32_t TouchProbe1PositiveValue;
-        uint32_t DigitalInputStatus;
-
+    struct  OSAL_PACKED {
+        uint16_t Dbg_fixed; /* addr 0x001C, slave DC_Device */
+        uint16_t Dbg_counter; /* addr 0x001E, slave DC_Device */
+        uint32_t Enc0; /* addr 0x0020, slave DC_Device */
+        uint32_t Enc1; /* addr 0x0024, slave DC_Device */
+        uint32_t Enc2; /* addr 0x0028, slave DC_Device */
+        uint32_t Enc3; /* addr 0x002C, slave DC_Device */
+        uint32_t Buttons; /* addr 0x0030, slave DC_Device */
+        uint32_t Flags; /* addr 0x0034, slave DC_Device */
+        uint32_t Enc_abs; /* addr 0x0038, slave DC_Device */
+        uint32_t Enc_quad; /* addr 0x003C, slave DC_Device */
+        uint32_t Limiters; /* addr 0x0040, slave DC_Device */
+        uint32_t Motor_pos; /* addr 0x0044, slave DC_Device */
+        int32_t Motor_speed; /* addr 0x0048, slave DC_Device */
     } inputs;
 } process_data_t;
 OSAL_PACKED_END
+#else
+OSAL_PACKED_BEGIN
+typedef struct OSAL_PACKED
+{
+    struct  {
+        uint8_t R1; /* addr 0x0000, slave SSC_Device */
+        uint8_t R2; /* addr 0x0001, slave SSC_Device */
+        uint8_t R3; /* addr 0x0002, slave SSC_Device */
+        uint8_t R4; /* addr 0x0003, slave SSC_Device */
+        uint8_t R5; /* addr 0x0004, slave SSC_Device */
+        uint8_t R6; /* addr 0x0005, slave SSC_Device */
+        uint8_t R7; /* addr 0x0006, slave SSC_Device */
+        uint8_t R8; /* addr 0x0007, slave SSC_Device */
+        uint8_t R9; /* addr 0x0008, slave SSC_Device */
+        uint8_t R10; /* addr 0x0009, slave SSC_Device */
+        uint8_t R11; /* addr 0x000A, slave SSC_Device */
+        uint8_t R12; /* addr 0x000B, slave SSC_Device */
+        uint8_t R13; /* addr 0x000C, slave SSC_Device */
+        uint8_t R14; /* addr 0x000D, slave SSC_Device */
+        uint8_t R15; /* addr 0x000E, slave SSC_Device */
+        uint8_t R16; /* addr 0x000F, slave SSC_Device */
+    } outputs;
+    struct  {
+        uint8_t D1; /* addr 0x0018, slave SSC_Device */
+        uint8_t D2; /* addr 0x0019, slave SSC_Device */
+        uint8_t D3; /* addr 0x001A, slave SSC_Device */
+        uint8_t D4; /* addr 0x001B, slave SSC_Device */
+        uint8_t D5; /* addr 0x001C, slave SSC_Device */
+        uint8_t D6; /* addr 0x001D, slave SSC_Device */
+        uint8_t D7; /* addr 0x001E, slave SSC_Device */
+        uint8_t D8; /* addr 0x001F, slave SSC_Device */
+        uint8_t D9; /* addr 0x0020, slave SSC_Device */
+        uint8_t D10; /* addr 0x0021, slave SSC_Device */
+        uint8_t D11; /* addr 0x0022, slave SSC_Device */
+        uint8_t D12; /* addr 0x0023, slave SSC_Device */
+        uint8_t D13; /* addr 0x0024, slave SSC_Device */
+        uint8_t D14; /* addr 0x0025, slave SSC_Device */
+        uint8_t D15; /* addr 0x0026, slave SSC_Device */
+        uint8_t D16; /* addr 0x0027, slave SSC_Device */
+    } inputs;
+} process_data_t;
+OSAL_PACKED_END
+#endif
+
 
 /* ============================================================================
  * Утилиты для вывода и логирования
@@ -475,6 +545,33 @@ static bool soem_init(const char *ifname) {
     return true;
 }
 
+static void cmd_wap() {
+    unsigned int my_sleep = 50000;
+    process_data_t *pd = (process_data_t *)IOmap;
+    unsigned int cur_time = 0;
+    unsigned int current_pos = 0;
+    char a[17] = {""};
+    unsigned long my_cnt = 0;
+    printf("wap_text: %s\n", wap_text);
+    do
+    {
+        if (cur_time >= 1000000) {
+            cur_time = 0;
+            current_pos = out_copy_chars((char*)&pd->outputs._1_display, 16, (char*)wap_text, current_pos, sizeof(wap_text), 1);
+            memcpy(a, (char*)&pd->outputs._1_display, 16);
+            my_cnt++;
+            printf("%lu LCD: %s\n", my_cnt, a);
+
+        }
+        ecx_send_processdata(&ecx_context);
+        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+        usleep(my_sleep);
+        cur_time += my_sleep;
+
+
+    } while (true);
+}
+
 /**
  * Сканирование EtherCAT шины и обнаружение устройств
  *
@@ -529,7 +626,7 @@ static void soem_scan_bus(void) {
         return;
     }
     log_verbose("Init bus completed successfully");
-
+    process_data_t *pd = (process_data_t *)IOmap;
     /* Перед тем как перейти в OPERATIONAL стейт необходимо проверить что слейвы имеют валидные
        process data для этого отправляем и получаем их */
     ecx_send_processdata(&ecx_context);
@@ -540,11 +637,46 @@ static void soem_scan_bus(void) {
     ecx_writestate(&ecx_context, 0);
 
     uint16_t chk = 200;
+
+    memcpy(&(pd->outputs._1_display), "PIC_GOVNO_PIC_GOVNO_PIC_GOVNO", 16);
+    pd->outputs.Target_pos = 0;
+    pd->outputs.Max_speed = 0;
+    pd->outputs.Relays = 0;
+
+    // unsigned int current_pos = 0;
+    // char a[17] = {""};
+    // unsigned long my_cnt = 0;
+    // printf("wap_text: %s\n", wap_text);
+    // clock_t start_time = clock();
+
+    // do
+    // {
+    //     // get current time in miliseconds
+    //     clock_t end_time = clock();
+    //     double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+
+    //     if (elapsed_time >= 1.0) {
+    //         start_time = clock();
+    //         current_pos = out_copy_chars((char*)&pd->outputs._1_display, 16, (char*)wap_text, current_pos, sizeof(wap_text), 1);
+    //         memcpy(a, (char*)&pd->outputs._1_display, 16);
+    //         my_cnt++;
+    //         printf("%lu LCD: %s\n", my_cnt, a);
+    //         hex_dump_print((uint8_t*)pd, sizeof(process_data_t), "process_data_t");
+
+
+    //     }
+    //     ecx_send_processdata(&ecx_context);
+    //     ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+    //     ecx_statecheck(&ecx_context, 0, EC_STATE_OPERATIONAL, 50000);
+
+    // } while (true);
+
     /* wait for all slaves to reach OP state */
     do
     {
        ecx_send_processdata(&ecx_context);
        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+       //printf("PROGRESS: %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n", pd->inputs.D1, pd->inputs.D2, pd->inputs.D3, pd->inputs.D4, pd->inputs.D5, pd->inputs.D6, pd->inputs.D7, pd->inputs.D8, pd->inputs.D9, pd->inputs.D10, pd->inputs.D11, pd->inputs.D12, pd->inputs.D13, pd->inputs.D14, pd->inputs.D15, pd->inputs.D16);
        ecx_statecheck(&ecx_context, 0, EC_STATE_OPERATIONAL, 50000);
     } while (chk-- && (ecx_context.slavelist[0].state != EC_STATE_OPERATIONAL));
     if (ecx_context.slavelist[0].state != EC_STATE_OPERATIONAL)
@@ -554,26 +686,44 @@ static void soem_scan_bus(void) {
        printf("Current fieldbus slaves BITWISE OR state: %s\n", state_to_string(ecx_context.slavelist[0].state));
     }
 
-     log_verbose("Slave initialization completed successfully, OPERATIONAL state reached");
 
-     process_data_t *pd = (process_data_t *)IOmap;
-     /* print inputs of pd
-      * LastErrorCode;
-      * StatusWord;
-      * ModesOfOperationDisplay;
-      * ActualPosition;
-      * TouchProbeStatus;
-      * TouchProbe1PositiveValue;
-      * DigitalInputStatus;
-      */
-     printf("Inputs of pd of EM3E-556: \n");
-     printf("LastErrorCode: %d\n", pd->inputs.LastErrorCode);
-     printf("StatusWord: %d\n", pd->inputs.StatusWord);
-     printf("ModesOfOperationDisplay: %d\n", pd->inputs.ModesOfOperationDisplay);
-     printf("ActualPosition: %d\n", pd->inputs.ActualPosition);
-     printf("TouchProbeStatus: %d\n", pd->inputs.TouchProbeStatus);
-     printf("TouchProbe1PositiveValue: %d\n", pd->inputs.TouchProbe1PositiveValue);
-     printf("DigitalInputStatus: %u\n", pd->inputs.DigitalInputStatus);
+
+    // unsigned int cnt = 0;
+    // const unsigned int max_cnt = 1000;
+    // const unsigned int how_long = 2; // seconds for max_cnt loop reached
+    // const unsigned int sleep_us = 1000000/(max_cnt/how_long);
+    // do
+    // {
+
+    //     ecx_send_processdata(&ecx_context);
+    //     ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+    //     usleep(sleep_us);
+    //     cnt++;
+    //     //printf("%d/1000 %s: %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n", cnt, state_to_string(ecx_context.slavelist[0].state), pd->inputs.D1, pd->inputs.D2, pd->inputs.D3, pd->inputs.D4, pd->inputs.D5, pd->inputs.D6, pd->inputs.D7, pd->inputs.D8, pd->inputs.D9, pd->inputs.D10, pd->inputs.D11, pd->inputs.D12, pd->inputs.D13, pd->inputs.D14, pd->inputs.D15, pd->inputs.D16);
+    //     printf("%d/1000 %s:\n\tDbg_fixed: %d Dbg_Counter: %d Enc0: %d Enc1: %d Enc2: %d Enc3: %d Buttons: %d\n\tFlags: %d Enc_Abs: %d Enc_Quad: %d Limiters: %d Motor_Pos: %d Motor_Speed: %d \n", cnt, state_to_string(ecx_context.slavelist[0].state), pd->inputs.Dbg_fixed, pd->inputs.Dbg_counter, pd->inputs.Enc0, pd->inputs.Enc1, pd->inputs.Enc2, pd->inputs.Enc3, pd->inputs.Buttons, pd->inputs.Flags, pd->inputs.Enc_abs, pd->inputs.Enc_quad, pd->inputs.Limiters, pd->inputs.Motor_pos, pd->inputs.Motor_speed);
+
+    // } while (cnt < max_cnt && true);
+
+    //  log_verbose("Slave initialization completed successfully, OPERATIONAL state reached");
+
+    // // print whole process data structure
+    hex_dump_print((uint8_t*)pd, sizeof(process_data_t), "process_data_t");
+
+
+     // printf("Inputs of pd of EM3E-556: \n");
+     // printf("LastErrorCode: %d\n", pd->inputs.LastErrorCode);
+     // printf("StatusWord: %d\n", pd->inputs.StatusWord);
+     // printf("ModesOfOperationDisplay: %d\n", pd->inputs.ModesOfOperationDisplay);
+     // printf("ActualPosition: %d\n", pd->inputs.ActualPosition);
+     // printf("TouchProbeStatus: %d\n", pd->inputs.TouchProbeStatus);
+     // printf("TouchProbe1PositiveValue: %d\n", pd->inputs.TouchProbe1PositiveValue);
+     // printf("DigitalInputStatus: %u\n", pd->inputs.DigitalInputs);
+
+
+
+     // char test[] = "1234567891234567";
+     // memcpy(test, &(pd->inputs.D1), 16);
+    // printf("AFTER: %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n", pd->inputs.D1, pd->inputs.D2, pd->inputs.D3, pd->inputs.D4, pd->inputs.D5, pd->inputs.D6, pd->inputs.D7, pd->inputs.D8, pd->inputs.D9, pd->inputs.D10, pd->inputs.D11, pd->inputs.D12, pd->inputs.D13, pd->inputs.D14, pd->inputs.D15, pd->inputs.D16);
 
 
     /* Заголовок таблицы */
@@ -2217,6 +2367,9 @@ static bool process_command(char *line) {
         } else {
             history_show();
         }
+    }
+    else if (strcmp(argv[0], "wap") == 0) {
+        cmd_wap();
     }
     else {
         printf("ERROR: Unknown command '%s'. Type 'help' for list of commands.\n", argv[0]);

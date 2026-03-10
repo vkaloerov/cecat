@@ -5,17 +5,33 @@
  * аналогично модулю hexdump в Python
  */
 
-#include "my_hex_dump.h"
+
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+#include "my_hex_dump.h"
+
+unsigned int out_copy_chars(char *output, size_t output_len, const char *data, int current_pos, size_t data_size, int shift) {
+    size_t to_copy = shift < output_len ? shift : output_len;
+    int old_current_pos = current_pos;
+    for (size_t i = 0; i < output_len; ++i) {
+        output[i] = data[current_pos];
+        current_pos++;
+    }
+    current_pos = old_current_pos + to_copy;
+    if ((size_t)current_pos >= data_size) {
+        current_pos = 0;
+    }
+
+    return current_pos;
+}
 
 /**
  * Форматировать одну строку hex dump в буфер
  *
  * Формат:
  * 00000000: 48 65 6c 6c 6f 20 57 6f 72 6c 64 00 2e 2e 2e 2e  |Hello World....|
- * 
+ *
  * @param output    - Выходной буфер
  * @param output_len - Размер выходного буфера
  * @param offset    - Текущий offset в файле
@@ -122,7 +138,7 @@ void hex_dump_print_width(const uint8_t *data, size_t length, int width, const c
 
     /* Вывести каждую строку */
     char line_buffer[256];
-    for (size_t offset = 0; offset < length; offset += width) {
+    for (size_t offset = 0; offset < length; offset += (size_t)width) {
         size_t remaining = length - offset;
         size_t line_len = (remaining < (size_t)width) ? remaining : width;
 
