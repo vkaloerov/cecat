@@ -11,6 +11,7 @@
  * - Verbose режим для отладки
  */
 
+#include "osal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -22,6 +23,7 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
+#include <windows.h>
 #else
 #include <unistd.h>
 #include <sys/socket.h>
@@ -34,6 +36,9 @@
 #include "soem/soem.h"
 #include "my_hex_dump.h"
 
+#ifdef _WIN32
+#else
+#endif
 
 static const char wap_text[] = {"LOREM_IPSUM_DOLOR_SIT_AMET_CONSECTETUER_ADIPISCING_ELIT._AENEAN_COMMODO_LIGULA_EGET_DOLOR._AENEAN_MASSA._CUM_SOCIIS_NATOQUE_PENATIBUS_ET_MAGNIS_DIS_PARTURIENT_MONTES_NASCETUR_RIDICULUS_MUS._DONEC_QUAM_FELIS_ULTRICIES_NEC_PELLENTESQUE_EU_PRETIUM_QUIS_SEM._NULLA_CONSEQUAT_MASSA_QUIS_ENIM._DONEC_PEDE_JUSTO_FRINGILLA_VEL_ALIQUET_NEC_VULPUTATE_EGET_ARCU._IN_ENIM_JUSTO_RHONCUS_UT_IMPERDIET_A_VENENATIS_VITAE_JUSTO._NULLAM_DICTUM_FELIS_EU_PEDE_MOLLIS_PRETIUM._INTEGER_TINCIDUNT._CRAS_DAPIBUS._VIVAMUS_ELEMENTUM_SEMPER_NISI._AENEAN_VULPUTATE_ELEIFEND_TELLUS._AENEAN_LEO_LIGULA_PORTTITOR_EU_CONSEQUAT_VITAE_ELEIFEND_AC_ENIM._ALIQUAM_LOREM_ANTE_DAPIBUS_IN_VIVERRA_QUIS_FEUGIAT_A_TELLUS._PHASELLUS_VIVERRA_NULLA_UT_METUS_VARIUS_LAOREET._QUISQUE_RUTRUM._AENEAN_IMPERDIET._ETIAM_ULTRICIES_NISI_VEL_AUGUE._CURABITUR_ULLAMCORPER_ULTRICIES_NISI._NAM_EGET_DUI._ETIAM_RHONCUS._MAECENAS_TEMPUS_TELLUS_EGET_CONDIMENTUM_RHONCUS_SEM_QUAM_SEMPER_LIBERO_SIT_AMET_ADIPISCING_SEM_NEQUE_SED_IPSUM._NAM_QUAM_NUNC_BLANDIT_VEL_LUCTUS_PULVINAR_HENDRERIT_ID_LOREM._MAECENAS_NEC_ODIO_ET_ANTE_TINCIDUNT_TEMPUS._DONEC_VITAE_SAPIEN_UT_LIBERO_VENENATIS_FAUCIBUS._NULLAM_QUIS_ANTE._ETIAM_SIT_AMET_ORCI_EGET_EROS_FAUCIBUS_TINCIDUNT._DUIS_LEO._SED_FRINGILLA_MAURIS_SIT_AMET_NIBH._DONEC_SODALES_SAGITTIS_MAGNA._SED_CONSEQUAT_LEO_EGET_BIBENDUM_SODALES_AUGUE_VELIT_CURSUS_NUNC_QUIS_GRAVIDA_MAGNA_MI_A_LIBERO._FUSCE_VULPUTATE_ELEIFEND_SAPIEN._VESTIBULUM_PURUS_QUAM_SCELERISQUE_UT_MOLLIS_SED_NONUMMY_ID_METUS._NULLAM_ACCUMSAN_LOREM_IN_DUI._CRAS_ULTRICIES_MI_EU_TURPIS_HENDRERIT_FRINGILLA._VESTIBULUM_ANTE_IPSUM_PRIMIS_IN_FAUCIBUS_ORCI_LUCTUS_ET_ULTRICES_POSUERE_CUBILIA_CURAE;_IN_AC_DUI_QUIS_MI_CONSECTETUER_LACINIA._NAM_PRETIUM_TURPIS_ET"};
 
@@ -205,6 +210,8 @@ static const char* state_to_string(uint16_t state) {
         default: return "UNKNOWN";
     }
 }
+#ifdef _WIN32
+#else
 
 /* ============================================================================
  * История команд (Command History) - POSIX реализация с сохранением в файл
@@ -512,7 +519,7 @@ static bool read_line_with_history(char *buffer, size_t max_len) {
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
     return false;
 }
-
+#endif
 /* ============================================================================
  * Функции работы с SOEM
  * ============================================================================ */
@@ -565,7 +572,7 @@ static void cmd_wap() {
         }
         ecx_send_processdata(&ecx_context);
         ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
-        usleep(my_sleep);
+        osal_usleep(my_sleep);
         cur_time += my_sleep;
 
 
@@ -638,38 +645,52 @@ static void soem_scan_bus(void) {
 
     uint16_t chk = 200;
 
-    memcpy(&(pd->outputs._1_display), "PIC_GOVNO_PIC_GOVNO_PIC_GOVNO", 16);
+    memcpy(&(pd->outputs._1_display), "11111111111PIC_GOVNO_PIC_GOVNO_PIC_GOVNO", 16);
     pd->outputs.Target_pos = 0;
     pd->outputs.Max_speed = 0;
     pd->outputs.Relays = 0;
-
-    // unsigned int current_pos = 0;
+#if 1 // SOME DUMMY TEST
+    unsigned int current_pos = 0;
     // char a[17] = {""};
     // unsigned long my_cnt = 0;
     // printf("wap_text: %s\n", wap_text);
-    // clock_t start_time = clock();
+    clock_t start_time = clock();
 
-    // do
-    // {
-    //     // get current time in miliseconds
-    //     clock_t end_time = clock();
-    //     double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+    do
+    {
+        // get current time in miliseconds
+        clock_t end_time = clock();
+        double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
 
-    //     if (elapsed_time >= 1.0) {
-    //         start_time = clock();
-    //         current_pos = out_copy_chars((char*)&pd->outputs._1_display, 16, (char*)wap_text, current_pos, sizeof(wap_text), 1);
-    //         memcpy(a, (char*)&pd->outputs._1_display, 16);
-    //         my_cnt++;
-    //         printf("%lu LCD: %s\n", my_cnt, a);
-    //         hex_dump_print((uint8_t*)pd, sizeof(process_data_t), "process_data_t");
+        if (elapsed_time >= 0.9) {
+            start_time = clock();
+            current_pos = out_copy_chars((char*)&pd->outputs._1_display, 16, (char*)wap_text, current_pos, sizeof(wap_text), 1);
+            // memcpy(a, (char*)&pd->outputs._1_display, 16);
+            // my_cnt++;
+            // printf("%lu LCD: %s\n", my_cnt, a);
+            hex_dump_print((uint8_t*)pd, sizeof(process_data_t), "process_data_t");
 
 
-    //     }
-    //     ecx_send_processdata(&ecx_context);
-    //     ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
-    //     ecx_statecheck(&ecx_context, 0, EC_STATE_OPERATIONAL, 50000);
+        }
+        ///////////////////////////////////////////////////////////////////////////
+        ecx_config_init(&ecx_context);
+        ecx_config_map_group(&ecx_context, &IOmap, 0);
+        ecx_configdc(&ecx_context);
+        ecx_statecheck(&ecx_context, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
+        ecx_send_processdata(&ecx_context);
+        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+        ecx_context.slavelist[0].state = EC_STATE_OPERATIONAL;
+        ecx_writestate(&ecx_context, 0);
+        //////////////////////////////////////////////////////////////////////////
 
-    // } while (true);
+
+        ecx_send_processdata(&ecx_context);
+        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+        ecx_statecheck(&ecx_context, 0, EC_STATE_OPERATIONAL, 50000);
+        osal_usleep(1000000);
+
+    } while (true);
+#endif
 
     /* wait for all slaves to reach OP state */
     do
@@ -1605,7 +1626,7 @@ static void cmd_pdo_loop(int argc, char **argv) {
 
     soem_run_pdo_loop(cycles, interval_ms);
 }
-
+#if 0
 /* ============================================================================
  * Leadshine EM3E-556 Stepper Motor Control Functions
  * ============================================================================ */
@@ -1728,7 +1749,7 @@ static bool motor_em3e_556_enable(int slave_idx) {
         } else if (state == STATE_NOT_READY) {
             outputs->control_word = 0;
             printf("\n✗ Drive not ready. Waiting...\n");
-            usleep(100000);
+            osal_usleep(100000);
 
         } else if (state == STATE_FAULT) {
             printf("\n✗ Drive in FAULT state. Resetting...\n");
@@ -2005,7 +2026,7 @@ static void cmd_motor_status(int argc, char **argv) {
     int slave_idx = atoi(argv[1]);
     motor_em3e_556_print_status(slave_idx);
 }
-
+#endif
 /* ============================================================================
  * cmd_c_funcs — прямой вызов функций SOEM из интерактивного интерфейса
  *
@@ -2339,6 +2360,7 @@ static bool process_command(char *line) {
     else if (strcmp(argv[0], "pdo-loop") == 0) {
         cmd_pdo_loop(argc, argv);
     }
+    #if 0
     else if (strcmp(argv[0], "motor-enable") == 0) {
         cmd_motor_enable(argc, argv);
     }
@@ -2357,16 +2379,20 @@ static bool process_command(char *line) {
     else if (strcmp(argv[0], "motor-status") == 0) {
         cmd_motor_status(argc, argv);
     }
+    #endif
     else if (strcmp(argv[0], "c-func") == 0)
     {
         cmd_c_funcs(argc, argv);
     }
     else if (strcmp(argv[0], "history") == 0) {
+        #ifdef _WIN32
+        #else
         if (argc > 1 && strcmp(argv[1], "clear") == 0) {
             history_clear();
         } else {
             history_show();
         }
+        #endif
     }
     else if (strcmp(argv[0], "wap") == 0) {
         cmd_wap();
@@ -2383,6 +2409,41 @@ static bool process_command(char *line) {
  */
 static void repl_loop(void) {
     char line[MAX_COMMAND_LEN];
+
+    #ifdef _WIN32
+    /* Версия без истории для Windows */
+    printf("\nEtherCAT CLI - Interactive Mode\n");
+    printf("Type 'help' for commands, 'quit' to exit\n\n");
+
+    while (1) {
+        printf("CLI> ");
+        fflush(stdout);
+
+        if (fgets(line, sizeof(line), stdin) == NULL) {
+            break;  /* EOF или ошибка */
+        }
+
+        /* Убираем trailing newline и carriage return */
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+            line[--len] = '\0';
+        }
+
+        /* Убираем trailing whitespace */
+        while (len > 0 && isspace((unsigned char)line[len - 1])) {
+            line[--len] = '\0';
+        }
+
+        if (len == 0) {
+            continue;  /* Пустая строка */
+        }
+
+        if (!process_command(line)) {
+            break;  /* Команда quit/exit */
+        }
+    }
+    #else
+
 
     /* Загрузить историю при старте */
     history_load();
@@ -2417,6 +2478,7 @@ static void repl_loop(void) {
             break;  /* Команда quit/exit */
         }
     }
+    #endif
 
     printf("\nExiting...\n");
 }

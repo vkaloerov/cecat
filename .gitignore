@@ -60,3 +60,6 @@ SOEM/
 soem/
 .clangd
 compile_commands.json
+/dummy-ecat-cli.dir
+/list-adapters.dir/Debug
+/x64
