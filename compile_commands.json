@@ -1,0 +1,17 @@
+[
+  {
+    "directory": "C:/workspace/drag_carrot/cecat",
+    "command": "clang -std=c99 -IC:/workspace/drag_carrot/SOEM-2.0.0/include -IC:/workspace/drag_carrot/SOEM-2.0.0/osal -IC:/workspace/drag_carrot/SOEM-2.0.0/osal/win32 -IC:/workspace/drag_carrot/SOEM-2.0.0/oshw/win32 -IC:/npcap-sdk/Include -c ecat_cli.c",
+    "file": "C:/workspace/drag_carrot/cecat/ecat_cli.c"
+  },
+  {
+    "directory": "C:/workspace/drag_carrot/cecat",
+    "command": "clang -std=c99 -IC:/workspace/drag_carrot/SOEM-2.0.0/include -IC:/workspace/drag_carrot/SOEM-2.0.0/osal -IC:/workspace/drag_carrot/SOEM-2.0.0/osal/win32 -IC:/workspace/drag_carrot/SOEM-2.0.0/oshw/win32 -IC:/npcap-sdk/Include -c my_hex_dump.c",
+    "file": "C:/workspace/drag_carrot/cecat/my_hex_dump.c"
+  },
+  {
+    "directory": "C:/workspace/drag_carrot/cecat",
+    "command": "clang -std=c99 -IC:/workspace/drag_carrot/SOEM-2.0.0/include -IC:/workspace/drag_carrot/SOEM-2.0.0/osal -IC:/workspace/drag_carrot/SOEM-2.0.0/osal/win32 -IC:/workspace/drag_carrot/SOEM-2.0.0/oshw/win32 -IC:/npcap-sdk/Include -c list_adapters.c",
+    "file": "C:/workspace/drag_carrot/cecat/list_adapters.c"
+  }
+]

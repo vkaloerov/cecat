@@ -555,28 +555,37 @@ static bool soem_init(const char *ifname) {
 static void cmd_wap() {
     unsigned int my_sleep = 50000;
     process_data_t *pd = (process_data_t *)IOmap;
-    unsigned int cur_time = 0;
     unsigned int current_pos = 0;
-    char a[17] = {""};
-    unsigned long my_cnt = 0;
-    printf("wap_text: %s\n", wap_text);
+    clock_t start_time = clock();
+    int counter = 5;
+    int lcnt = 0;
+
     do
     {
-        if (cur_time >= 1000000) {
-            cur_time = 0;
-            current_pos = out_copy_chars((char*)&pd->outputs._1_display, 16, (char*)wap_text, current_pos, sizeof(wap_text), 1);
-            memcpy(a, (char*)&pd->outputs._1_display, 16);
-            my_cnt++;
-            printf("%lu LCD: %s\n", my_cnt, a);
+        // get current time in miliseconds
+        clock_t end_time = clock();
+        double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
 
+        if (elapsed_time >= 0.5) {
+            start_time = clock();
+            current_pos = out_copy_chars((char*)&pd->outputs._1_display, 16, (char*)wap_text, current_pos, sizeof(wap_text), 1);
+            printf("Loops count = %d\n", lcnt);
+            lcnt = 0;
+            hex_dump_print((uint8_t*)pd, sizeof(process_data_t), "process_data_t");
+            counter--;
         }
+
+
+        ///////////////////////////////////////////////////////////////////////////
+
         ecx_send_processdata(&ecx_context);
         ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
-        osal_usleep(my_sleep);
-        cur_time += my_sleep;
+        //////////////////////////////////////////////////////////////////////////
+        lcnt++;
+        osal_usleep(10000);
 
+    } while (counter);
 
-    } while (true);
 }
 
 /**
@@ -587,7 +596,9 @@ static void cmd_wap() {
  * 2. Mapping I/O (ecx_config_map)
  * 3. Вывод списка обнаруженных slaves
  */
+
 static void soem_scan_bus(void) {
+#if 1
     if (!soem_initialized) {
         printf("ERROR: SOEM not initialized. Use -i <interface> option.\n");
         return;
@@ -643,18 +654,24 @@ static void soem_scan_bus(void) {
     ecx_context.slavelist[0].state = EC_STATE_OPERATIONAL;
     ecx_writestate(&ecx_context, 0);
 
-    uint16_t chk = 200;
 
-    memcpy(&(pd->outputs._1_display), "11111111111PIC_GOVNO_PIC_GOVNO_PIC_GOVNO", 16);
+
+    memcpy(&(pd->outputs._1_display), "TESTTESTTESTTEST", 16);
     pd->outputs.Target_pos = 0;
     pd->outputs.Max_speed = 0;
     pd->outputs.Relays = 0;
-#if 1 // SOME DUMMY TEST
+#endif
+
+#if 0 // SOME DUMMY TEST
     unsigned int current_pos = 0;
     // char a[17] = {""};
     // unsigned long my_cnt = 0;
     // printf("wap_text: %s\n", wap_text);
     clock_t start_time = clock();
+    process_data_t *pd = (process_data_t *)IOmap;
+
+
+
 
     do
     {
@@ -672,26 +689,25 @@ static void soem_scan_bus(void) {
 
 
         }
+
+
         ///////////////////////////////////////////////////////////////////////////
         ecx_config_init(&ecx_context);
         ecx_config_map_group(&ecx_context, &IOmap, 0);
-        ecx_configdc(&ecx_context);
+        //ecx_configdc(&ecx_context);
         ecx_statecheck(&ecx_context, 0, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 4);
+
         ecx_send_processdata(&ecx_context);
         ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
         ecx_context.slavelist[0].state = EC_STATE_OPERATIONAL;
         ecx_writestate(&ecx_context, 0);
         //////////////////////////////////////////////////////////////////////////
-
-
-        ecx_send_processdata(&ecx_context);
-        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
-        ecx_statecheck(&ecx_context, 0, EC_STATE_OPERATIONAL, 50000);
         osal_usleep(1000000);
 
-    } while (true);
+    } while (false);
 #endif
 
+    uint16_t chk = 200;
     /* wait for all slaves to reach OP state */
     do
     {
@@ -1002,6 +1018,76 @@ static bool soem_request_state(uint16_t state, uint32_t timeout_ms) {
 
     return true;
 }
+
+static void reinit(bool full)
+{
+
+
+
+    if (full) {
+        log_verbose("Starting full reinit...");
+        soem_cleanup();
+        soem_init(interface_name);
+    } else {
+        log_verbose("Starting reinit...");
+    }
+
+    if (!soem_initialized) {
+        printf("ERROR: SOEM not initialized. Use -i <interface> option.\n");
+        return;
+    }
+
+    /* Конфигурирование сети */
+    int wkc = ecx_config_init(&ecx_context);
+    log_verbose("ecx_config_init returned: %d", wkc);
+
+    if (wkc <= 0) {
+        print_error("No slaves found on the bus");
+        return;
+    }
+
+    /* Mapping процесс данных */
+    unsigned short sz = ecx_config_map_group(&ecx_context, &IOmap, 0);
+    if (sz > MAX_IO_MAP_SIZE) {
+        print_error("I/O mapping failed");
+        return;
+    }
+
+    printf("Found %d slave(s)\n\n", ecx_context.slavecount);
+    expectedWKC = ecx_context.grouplist[0].outputsWKC * 2 + ecx_context.grouplist[0].inputsWKC;
+
+    // как указано в документации пора попробовать установить DC
+    ecx_configdc(&ecx_context);
+
+    /* Переход в PRE-OP */
+    if (!soem_request_state(EC_STATE_PRE_OP, 5000)) {
+        print_error("Failed to reach PRE-OP state");
+        // return false;
+    }
+
+    /* Переход в SAFE-OP */
+    if (!soem_request_state(EC_STATE_SAFE_OP, 5000)) {
+        print_error("Failed to reach SAFE-OP state");
+        //return false;
+    }
+
+    /* Переход в OPERATIONAL */
+    if (!soem_request_state(EC_STATE_OPERATIONAL, 5000)) {
+        print_error("Failed to reach OPERATIONAL state");
+        //return false;
+    }
+
+}
+
+/*
+process_data_t *pd = (process_data_t *)IOmap;
+memcpy(&(pd->outputs._1_display), "TESTTESTTESTTEST", 16);
+pd->outputs.Target_pos = 0;
+pd->outputs.Max_speed = 0;
+pd->outputs.Relays = 0;
+hex_dump_print((uint8_t*)pd, sizeof(process_data_t), "process_data_t");
+
+*/
 
 /**
  * Активация PDO обмена (переход в OPERATIONAL)
@@ -2396,6 +2482,14 @@ static bool process_command(char *line) {
     }
     else if (strcmp(argv[0], "wap") == 0) {
         cmd_wap();
+    }
+    else if (strcmp(argv[0], "reinit") == 0){
+
+        if (argc > 1 && strcmp(argv[1], "full") == 0) {
+            reinit(true);
+        } else {
+            reinit(false);
+        }
     }
     else {
         printf("ERROR: Unknown command '%s'. Type 'help' for list of commands.\n", argv[0]);
