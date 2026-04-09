@@ -12,6 +12,7 @@
  */
 
 
+#include "osal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -157,6 +158,8 @@ static void cmd_wap(int counter, int bytes_to_write) {
     static unsigned int current_pos = 0;
     clock_t start_time = clock();
     int lcnt = 0;
+    process_data_t old_pd;
+    memcpy(&old_pd, pd, sizeof(process_data_t));
 
     do
     {
@@ -164,7 +167,7 @@ static void cmd_wap(int counter, int bytes_to_write) {
         clock_t end_time = clock();
         double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
 
-        if (elapsed_time >= 0.5) {
+        if (true || elapsed_time >= 0.5) {
             start_time = clock();
             current_pos = out_copy_chars((char*)&pd->outputs._1_display, bytes_to_write, (char*)wap_text, current_pos, sizeof(wap_text), 1);
             printf("Loops count = %d\n", lcnt);
@@ -179,6 +182,11 @@ static void cmd_wap(int counter, int bytes_to_write) {
         ecx_send_processdata(&ecx_context);
         ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
         //////////////////////////////////////////////////////////////////////////
+        // if (memcmp(pd, &old_pd, sizeof(process_data_t)) != 0) {
+        //     memcpy(&old_pd, pd, sizeof(process_data_t));
+        //     hex_dump_print((uint8_t*)pd, sizeof(process_data_t), "process_data_t");
+        // }
+        osal_usleep(100000);
         lcnt++;
 
 
