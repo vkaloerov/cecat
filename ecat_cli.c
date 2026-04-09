@@ -151,7 +151,7 @@ bool soem_init(const char *ifname) {
     return true;
 }
 
-static void cmd_wap(int counter) {
+static void cmd_wap(int counter, int bytes_to_write) {
     unsigned int my_sleep = 50000;
     process_data_t *pd = (process_data_t *)IOmap;
     static unsigned int current_pos = 0;
@@ -166,7 +166,7 @@ static void cmd_wap(int counter) {
 
         if (elapsed_time >= 0.5) {
             start_time = clock();
-            current_pos = out_copy_chars((char*)&pd->outputs._1_display, 16, (char*)wap_text, current_pos, sizeof(wap_text), 1);
+            current_pos = out_copy_chars((char*)&pd->outputs._1_display, bytes_to_write, (char*)wap_text, current_pos, sizeof(wap_text), 1);
             printf("Loops count = %d\n", lcnt);
             lcnt = 0;
             hex_dump_print((uint8_t*)pd, sizeof(process_data_t), "process_data_t");
@@ -1421,9 +1421,15 @@ static bool process_command(char *line) {
     }
     else if (strcmp(argv[0], "wap") == 0) {
         if (argc > 1) {
-            cmd_wap(atoi(argv[1]));
+            if (argc == 2) {
+                cmd_wap(atoi(argv[1]), 16);
+            } else if (argc == 3) {
+                cmd_wap(atoi(argv[1]), atoi(argv[2]));
+            } else {
+                printf("CAN'T RUN WAP CMD!!!");
+            }
         } else {
-            cmd_wap(1);
+            cmd_wap(1, 16);
         }
 
     }
@@ -1538,7 +1544,10 @@ static void print_usage(const char *prog_name) {
     printf("\nExamples:\n");
     printf("  %s -i eth0\n", prog_name);
     printf("  %s -i \"\\\\Device\\\\NPF_{...}\" -v\n", prog_name);
+
     printf("\n");
+
+
 }
 
 /**

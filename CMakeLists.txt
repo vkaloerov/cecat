@@ -26,8 +26,21 @@ else()
   add_compile_options(-Wall -Wextra)
 endif()
 
-# Путь к SOEM библиотеке (относительный путь от текущей директории)
-set(SOEM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../SOEM-2.0.0")
+# Путь к SOEM библиотеке — можно переопределить через -DSOEM_DIR=...
+if(NOT DEFINED SOEM_DIR)
+  set(SOEM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../SOEM-2.0.0")
+endif()
+message(STATUS "Using SOEM_DIR: ${SOEM_DIR}")
+
+# Авто-определение директории с soem.lib: либо SOEM_DIR/lib, либо корень SOEM_DIR
+if(NOT DEFINED SOEM_LIB_DIR)
+  if(EXISTS "${SOEM_DIR}/lib")
+    set(SOEM_LIB_DIR "${SOEM_DIR}/lib")
+  else()
+    set(SOEM_LIB_DIR "${SOEM_DIR}")
+  endif()
+endif()
+message(STATUS "Using SOEM_LIB_DIR: ${SOEM_LIB_DIR}")
 
 # Поиск Npcap SDK (для WinPcap headers) только для Windows
 if(WIN32)
@@ -58,7 +71,7 @@ if(WIN32)
 endif()
 
 # Добавляем путь к библиотекам SOEM
-link_directories(${SOEM_DIR}/lib)
+link_directories(${SOEM_LIB_DIR})
 
 # Добавляем путь к библиотекам Npcap (Windows)
 if(WIN32 AND DEFINED NPCAP_SDK_DIR)
