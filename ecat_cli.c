@@ -12,7 +12,6 @@
  */
 
 
-#include "osal.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -72,7 +71,7 @@ ecx_contextt ecx_context;
 /**
  * Вывод verbose сообщения (только если включен verbose режим)
  */
-static void log_verbose(const char *format, ...) {
+void log_verbose(const char *format, ...) {
     if (!verbose_mode) return;
 
     va_list args;
@@ -186,12 +185,97 @@ static void cmd_wap(int counter, int bytes_to_write) {
         //     memcpy(&old_pd, pd, sizeof(process_data_t));
         //     hex_dump_print((uint8_t*)pd, sizeof(process_data_t), "process_data_t");
         // }
-        osal_usleep(100000);
+        usleep(100000);
         lcnt++;
 
 
     } while (counter);
 
+}
+
+static void fsrt(int rel_target) {
+    process_data_t *pd = (process_data_t *)IOmap;
+    for (int i = 0; i < 10; i++) {
+        ecx_send_processdata(&ecx_context);
+        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+        usleep(10000);
+    }
+    pd->outputs.Target_pos = pd->inputs.Motor_pos + rel_target;
+    printf("Motor_pos is %u\n", pd->inputs.Motor_pos);
+    printf("Target_pos set to %u\n", pd->outputs.Target_pos);
+    for (int i = 0; i < 10; i++) {
+        ecx_send_processdata(&ecx_context);
+        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+        usleep(10000);
+    }
+
+}
+
+static void prtall(unsigned int num_iterations) {
+    process_data_t *pd = (process_data_t *)IOmap;
+    for (unsigned int i = 0; i < num_iterations; i++) {
+        ecx_send_processdata(&ecx_context);
+        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+        printf("POS:    %u\n", pd->inputs.Motor_pos);
+        printf("TARGET: %u\n", pd->outputs.Target_pos);
+        printf("DIFF:   %d\n", pd->inputs.Motor_pos - pd->outputs.Target_pos);
+        printf("SPD:    %d\n", pd->inputs.Motor_speed);
+        usleep(100000);
+    }
+
+}
+
+static void cmd_set_rel_target(int rel_target) {
+    uint32_t read_pos = 0;
+    uint32_t target = 0;
+    process_data_t *pd = (process_data_t *)IOmap;
+    clock_t start_time = clock();
+
+    if (abs(rel_target) < 100){
+        printf("rel_target too small %d, skipping\n", rel_target);
+        return;
+    }
+
+    for (int i = 0; i < 2; i++) {
+        ecx_send_processdata(&ecx_context);
+        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+        usleep(100000);
+    }
+    read_pos = pd->inputs.Motor_pos;
+    target = read_pos + rel_target;
+    pd->outputs.Target_pos = target;
+    for (int i = 0; i < 2; i++) {
+        ecx_send_processdata(&ecx_context);
+        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+        usleep(100000);
+    }
+    int counter = 0;
+    bool flag = false;
+    do {
+
+        clock_t end_time = clock();
+        double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+        //printf("elapsed_time: %f\n", elapsed_time);
+
+        if (counter == 5) {
+            counter = 0;
+            start_time = clock();
+            printf("target: %u, read_pos: %u, diff: %d\n", pd->outputs.Target_pos, pd->inputs.Motor_pos, pd->outputs.Target_pos - pd->inputs.Motor_pos);
+            printf("speed: %d\n", pd->inputs.Motor_speed);
+            hex_dump_print((uint8_t*)pd, sizeof(process_data_t), "process_data_t");
+            if (pd->inputs.Motor_speed) flag = true;
+
+        }
+
+        ecx_send_processdata(&ecx_context);
+        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+        usleep(100000);
+        counter++;
+
+
+
+
+    } while (pd->inputs.Motor_speed || !flag);
 }
 
 /**
@@ -1441,6 +1525,27 @@ static bool process_command(char *line) {
         }
 
     }
+    else if (strcmp(argv[0], "srt") == 0) {
+        if (argc > 1) {
+            int rel_target = atoi(argv[1]);
+            cmd_set_rel_target(rel_target);
+        }
+    }
+    else if (strcmp(argv[0], "prtall") == 0) {
+        if (argc > 1) {
+            int num_iterations = atoi(argv[1]);
+            prtall(num_iterations);
+        } else {
+            prtall(1);
+        }
+    }
+    else if (strcmp(argv[0], "fsrt") == 0) {
+        if (argc > 1) {
+            int rel_target = atoi(argv[1]);
+            fsrt(rel_target);
+        }
+    }
+
     else if (strcmp(argv[0], "reinit") == 0){
 
         if (argc > 1 && strcmp(argv[1], "full") == 0) {

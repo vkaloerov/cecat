@@ -90,6 +90,7 @@ add_executable(dummy-ecat-cli
 if(WIN32)
   target_include_directories(dummy-ecat-cli PRIVATE
         ${SOEM_DIR}/include
+        ${SOEM_DIR}/include/soem
         ${SOEM_DIR}/osal
         ${SOEM_DIR}/osal/win32
         ${SOEM_DIR}/oshw/win32
