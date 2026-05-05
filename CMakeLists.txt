@@ -16,19 +16,27 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
   endif()
 endif()
 
-
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Создаём симлинк compile_commands.json в корне проекта для clangd (только Linux/macOS)
+if(NOT WIN32)
+  execute_process(
+    COMMAND ${CMAKE_COMMAND} -E create_symlink
+      "${CMAKE_BINARY_DIR}/compile_commands.json"
+      "${CMAKE_SOURCE_DIR}/compile_commands.json"
+  )
+endif()
 
 # Опции компиляции
 if(MSVC)
   add_compile_options(/W4)
 else()
-  add_compile_options(-Wall -Wextra)
+  add_compile_options(-Wall -Wextra -Wno-unused-parameter)
 endif()
 
 # Путь к SOEM библиотеке — можно переопределить через -DSOEM_DIR=...
 if(NOT DEFINED SOEM_DIR)
-  set(SOEM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../SOEM-2.0.0")
+  set(SOEM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../SOEM/build")
 endif()
 message(STATUS "Using SOEM_DIR: ${SOEM_DIR}")
 
@@ -71,22 +79,47 @@ if(WIN32)
 endif()
 
 # Добавляем путь к библиотекам SOEM
-link_directories(${SOEM_LIB_DIR})
+link_directories(${SOEM_LIB_DIR} ${TERMBOX2_DIR})
 
 # Добавляем путь к библиотекам Npcap (Windows)
 if(WIN32 AND DEFINED NPCAP_SDK_DIR)
   link_directories(${NPCAP_SDK_DIR}/Lib/x64)
 endif()
 
-# Основной исполняемый файл
+# ============================================================================
+# using directly linenoise,due to BSD license
+# ============================================================================
+
+set(LINENOISE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../linenoise")
+message(STATUS "Using linenoise from: ${LINENOISE_DIR}")
+
+if(NOT EXISTS "${LINENOISE_DIR}/linenoise.h")
+  message(FATAL_ERROR "linenoise.h not found at ${LINENOISE_DIR}.")
+endif()
+
+if(NOT EXISTS "${LINENOISE_DIR}/linenoise.c")
+  message(FATAL_ERROR "linenoise.c not found at ${LINENOISE_DIR}.")
+endif()
+
+
+# ============================================================================
+# Main Executable - dummy-ecat-cli
+# ============================================================================
+
 add_executable(dummy-ecat-cli
     ecat_cli.c
     my_hex_dump.c
-    cli_history.c
     helper_cmd_c.c
+    ${LINENOISE_DIR}/linenoise.c
 )
 
-# Добавляем include directories для target
+# Compile definitions
+# TUI_BUILD guards the standalone main() in ecat_cli.c from conflicting with tui_main.c
+# target_compile_definitions(dummy-ecat-cli PRIVATE TUI_BUILD)
+
+# Include directories
+target_include_directories(dummy-ecat-cli PRIVATE)
+
 if(WIN32)
   target_include_directories(dummy-ecat-cli PRIVATE
         ${SOEM_DIR}/include
@@ -94,9 +127,9 @@ if(WIN32)
         ${SOEM_DIR}/osal
         ${SOEM_DIR}/osal/win32
         ${SOEM_DIR}/oshw/win32
+        ${LINENOISE_DIR}
     )
 
-  # Добавляем Npcap SDK если найден
   if(DEFINED NPCAP_SDK_DIR)
     target_include_directories(dummy-ecat-cli PRIVATE
             ${NPCAP_SDK_DIR}/Include
@@ -105,23 +138,27 @@ if(WIN32)
 else()
   target_include_directories(dummy-ecat-cli PRIVATE
         ${SOEM_DIR}/include
-        ${SOEM_DIR}/osal
-        ${SOEM_DIR}/osal/linux
-        ${SOEM_DIR}/oshw/linux
+        ${SOEM_DIR}/../include
+        ${SOEM_DIR}/../osal
+        ${SOEM_DIR}/../osal/linux
+        ${SOEM_DIR}/../oshw/linux
+        ${LINENOISE_DIR}
     )
 endif()
 
-# Линковка с SOEM и системными библиотеками
+# Link libraries
 if(WIN32)
-  target_link_libraries(dummy-ecat-cli soem ws2_32 winmm wpcap packet)
+  target_link_libraries(dummy-ecat-cli PRIVATE soem ws2_32 winmm wpcap packet)
 else()
-  target_link_libraries(dummy-ecat-cli soem pthread rt)
+  target_link_libraries(dummy-ecat-cli PRIVATE soem pthread rt)
 endif()
 
-# Диагностическая утилита для сетевых адаптеров
+# ============================================================================
+# Diagnostic Utility - list-adapters
+# ============================================================================
+
 add_executable(list-adapters list_adapters.c)
 
-# Добавляем include directories для diagnostic target
 if(WIN32)
   target_include_directories(list-adapters PRIVATE
         ${SOEM_DIR}/include
@@ -130,27 +167,27 @@ if(WIN32)
         ${SOEM_DIR}/oshw/win32
     )
 
-  # Добавляем Npcap SDK если найден
   if(DEFINED NPCAP_SDK_DIR)
     target_include_directories(list-adapters PRIVATE
             ${NPCAP_SDK_DIR}/Include
         )
   endif()
+
+  target_link_libraries(list-adapters PRIVATE soem ws2_32 winmm wpcap packet iphlpapi)
 else()
   target_include_directories(list-adapters PRIVATE
         ${SOEM_DIR}/include
-        ${SOEM_DIR}/osal
-        ${SOEM_DIR}/osal/linux
-        ${SOEM_DIR}/oshw/linux
+        ${SOEM_DIR}/../include
+        ${SOEM_DIR}/../osal
+        ${SOEM_DIR}/../osal/linux
+        ${SOEM_DIR}/../oshw/linux
     )
+
+  target_link_libraries(list-adapters PRIVATE soem pthread rt pcap)
 endif()
 
-# Линковка diagnostic утилиты
-if(WIN32)
-  target_link_libraries(list-adapters soem ws2_32 winmm wpcap packet iphlpapi)
-else()
-  target_link_libraries(list-adapters soem pthread rt pcap)
-endif()
+# ============================================================================
+# Installation
+# ============================================================================
 
-# Установка
 install(TARGETS dummy-ecat-cli list-adapters DESTINATION bin)

@@ -24,6 +24,7 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
+#include <io.h>
 #else
 #include <unistd.h>
 #include <sys/socket.h>
@@ -36,13 +37,33 @@
 #include "soem/soem.h"
 #include "my_hex_dump.h"
 #include "ecat_mapping_structs.h"
-#include "cli_history.h"
+
 #include "ecat_cli.h"      /* own public interface — keeps declarations in sync */
 #include "helper_cmd_c.h"
 
-#ifdef _WIN32
-#else
-#endif
+#include "../linenoise/linenoise.h"  // Add linenoise header
+
+// Remove MAX_COMMAND_LEN if defined in cli_history.h; define locally if needed
+#define MAX_COMMAND_LEN 1024  // Keep or adjust size
+// Helper to get a temp file path for history
+#define HISTORY_FILENAME ".ecat_cli_history"
+static char history_filepath[512] = "";
+static void history_get_filepath(void) {
+    const char *home = getenv("HOME");
+    if (!home) {
+        struct passwd *pw = getpwuid(getuid());
+        if (pw) home = pw->pw_dir;
+    }
+
+    if (home && strlen(home) < 450) {
+        snprintf(history_filepath, sizeof(history_filepath),
+                 "%s/%s", home, HISTORY_FILENAME);
+    } else {
+        /* Fallback на /tmp если HOME не доступна */
+        snprintf(history_filepath, sizeof(history_filepath),
+                 "/tmp/%s", HISTORY_FILENAME);
+    }
+}
 
 static const char wap_text[] = {"LOREM_IPSUM_DOLOR_SIT_AMET_CONSECTETUER_ADIPISCING_ELIT._AENEAN_COMMODO_LIGULA_EGET_DOLOR._AENEAN_MASSA._CUM_SOCIIS_NATOQUE_PENATIBUS_ET_MAGNIS_DIS_PARTURIENT_MONTES_NASCETUR_RIDICULUS_MUS._DONEC_QUAM_FELIS_ULTRICIES_NEC_PELLENTESQUE_EU_PRETIUM_QUIS_SEM._NULLA_CONSEQUAT_MASSA_QUIS_ENIM._DONEC_PEDE_JUSTO_FRINGILLA_VEL_ALIQUET_NEC_VULPUTATE_EGET_ARCU._IN_ENIM_JUSTO_RHONCUS_UT_IMPERDIET_A_VENENATIS_VITAE_JUSTO._NULLAM_DICTUM_FELIS_EU_PEDE_MOLLIS_PRETIUM._INTEGER_TINCIDUNT._CRAS_DAPIBUS._VIVAMUS_ELEMENTUM_SEMPER_NISI._AENEAN_VULPUTATE_ELEIFEND_TELLUS._AENEAN_LEO_LIGULA_PORTTITOR_EU_CONSEQUAT_VITAE_ELEIFEND_AC_ENIM._ALIQUAM_LOREM_ANTE_DAPIBUS_IN_VIVERRA_QUIS_FEUGIAT_A_TELLUS._PHASELLUS_VIVERRA_NULLA_UT_METUS_VARIUS_LAOREET._QUISQUE_RUTRUM._AENEAN_IMPERDIET._ETIAM_ULTRICIES_NISI_VEL_AUGUE._CURABITUR_ULLAMCORPER_ULTRICIES_NISI._NAM_EGET_DUI._ETIAM_RHONCUS._MAECENAS_TEMPUS_TELLUS_EGET_CONDIMENTUM_RHONCUS_SEM_QUAM_SEMPER_LIBERO_SIT_AMET_ADIPISCING_SEM_NEQUE_SED_IPSUM._NAM_QUAM_NUNC_BLANDIT_VEL_LUCTUS_PULVINAR_HENDRERIT_ID_LOREM._MAECENAS_NEC_ODIO_ET_ANTE_TINCIDUNT_TEMPUS._DONEC_VITAE_SAPIEN_UT_LIBERO_VENENATIS_FAUCIBUS._NULLAM_QUIS_ANTE._ETIAM_SIT_AMET_ORCI_EGET_EROS_FAUCIBUS_TINCIDUNT._DUIS_LEO._SED_FRINGILLA_MAURIS_SIT_AMET_NIBH._DONEC_SODALES_SAGITTIS_MAGNA._SED_CONSEQUAT_LEO_EGET_BIBENDUM_SODALES_AUGUE_VELIT_CURSUS_NUNC_QUIS_GRAVIDA_MAGNA_MI_A_LIBERO._FUSCE_VULPUTATE_ELEIFEND_SAPIEN._VESTIBULUM_PURUS_QUAM_SCELERISQUE_UT_MOLLIS_SED_NONUMMY_ID_METUS._NULLAM_ACCUMSAN_LOREM_IN_DUI._CRAS_ULTRICIES_MI_EU_TURPIS_HENDRERIT_FRINGILLA._VESTIBULUM_ANTE_IPSUM_PRIMIS_IN_FAUCIBUS_ORCI_LUCTUS_ET_ULTRICES_POSUERE_CUBILIA_CURAE;_IN_AC_DUI_QUIS_MI_CONSECTETUER_LACINIA._NAM_PRETIUM_TURPIS_ET"};
 
@@ -52,6 +73,7 @@ static const char wap_text[] = {"LOREM_IPSUM_DOLOR_SIT_AMET_CONSECTETUER_ADIPISC
 /* MAX_IO_MAP_SIZE is defined in ecat_cli.h */
 /* MAX_COMMAND_LEN is defined in cli_history.h */
 #define MAX_ARGS 32
+#define HISTORY_MAX_LEN 32
 
 char IOmap[MAX_IO_MAP_SIZE];          /* Буфер для I/O mapping (shared) */
 bool soem_initialized = false;        /* Флаг инициализации SOEM (shared) */
@@ -64,6 +86,30 @@ unsigned int expectedWKC = 0;         /* Expected WKC (shared) */
 /* SOEM 2.0 context structure (shared) */
 ecx_contextt ecx_context;
 
+/* ============================================================================
+ * Linenoise Completion Support
+ * ============================================================================ */
+
+// List of available commands for completion (extracted from process_command)
+static const char *available_commands[] = {
+    "help", "quit", "exit", "scan", "read-config", "read", "write",
+    "text-write", "verbose", "status", "pdo-start", "pdo-stop",
+    "pdo-read", "pdo-write", "pdo-loop", "history", "reinit", "fsrt", "prtall",
+    // Add any others as needed, e.g., "motor-enable" if uncommented
+    NULL  // Sentinel for iteration
+};
+
+/**
+ * Completion callback for linenoise: Suggests commands starting with the partial input.
+ */
+static void completion_callback(const char *buf, linenoiseCompletions *lc) {
+    size_t len = strlen(buf);
+    for (int i = 0; available_commands[i] != NULL; ++i) {
+        if (len == 0 || strncmp(buf, available_commands[i], len) == 0) {
+            linenoiseAddCompletion(lc, available_commands[i]);
+        }
+    }
+}
 /* ============================================================================
  * Утилиты для вывода и логирования
  * ============================================================================ */
@@ -1427,6 +1473,7 @@ static int parse_command(char *line, char **argv, int max_args) {
 static bool process_command(char *line) {
     char *argv[MAX_ARGS];
     int argc = parse_command(line, argv, MAX_ARGS);
+    bool legit_command = true;
 
     if (argc == 0) {
         /* Пустая команда - показываем help */
@@ -1505,9 +1552,9 @@ static bool process_command(char *line) {
         #ifdef _WIN32
         #else
         if (argc > 1 && strcmp(argv[1], "clear") == 0) {
-            history_clear();
+            //history_clear();
         } else {
-            history_show();
+            //history_show();
         }
         #endif
     }
@@ -1555,91 +1602,70 @@ static bool process_command(char *line) {
         }
     }
     else {
+        legit_command = false;
         printf("ERROR: Unknown command '%s'. Type 'help' for list of commands.\n", argv[0]);
+    }
+
+    if (legit_command) {
+        // Add to history
+        linenoiseHistoryAdd(line);
     }
 
     return true;
 }
-
-
-/**
- * Главный цикл REPL с поддержкой истории команд
+/*
+ * Simple REPL loop with linenoise and task bar
  */
 static void repl_loop(void) {
-    char line[MAX_COMMAND_LEN];
-
-    #ifdef _WIN32
-    /* Версия без истории для Windows */
     printf("\nEtherCAT CLI - Interactive Mode\n");
     printf("Type 'help' for commands, 'quit' to exit\n\n");
 
     while (1) {
-        printf("CLI> ");
-        fflush(stdout);
+        // Task bar: Display status info above the prompt
+        printf("\n--- Task Bar ---\n");
+        printf("Interface: %s | Slaves: %d | PDO Active: %s | Verbose: %s\n",
+               interface_name[0] ? interface_name : "none",
+               soem_initialized ? ecx_context.slavecount : 0,
+               pdo_active ? "yes" : "no",
+               verbose_mode ? "on" : "off");
+        printf("--- End Task Bar ---\n\n");
 
-        if (fgets(line, sizeof(line), stdin) == NULL) {
-            break;  /* EOF или ошибка */
+        // Use linenoise for line input with history support
+        char *line = linenoise("CLI> ");
+        if (line == NULL) {
+            // EOF (e.g., Ctrl+D) - exit cleanly
+            break;
         }
 
-        /* Убираем trailing newline и carriage return */
-        size_t len = strlen(line);
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
-            line[--len] = '\0';
-        }
-
-        /* Убираем trailing whitespace */
-        while (len > 0 && isspace((unsigned char)line[len - 1])) {
-            line[--len] = '\0';
-        }
-
-        if (len == 0) {
-            continue;  /* Пустая строка */
-        }
-
-        if (!process_command(line)) {
-            break;  /* Команда quit/exit */
-        }
-    }
-    #else
-
-
-    /* Загрузить историю при старте */
-    history_load();
-
-    printf("\nEtherCAT CLI - Interactive Mode\n");
-    printf("Type 'help' for commands, 'quit' to exit\n");
-    printf("Use UP/DOWN arrows to navigate command history\n\n");
-
-    while (1) {
-        // printf("dummy_says> ");
-        // fflush(stdout);
-
-        /* Используем функцию с поддержкой истории */
-        if (!read_line_with_history(line, sizeof(line))) {
-            break;  /* EOF или ошибка */
-        }
-
-        /* Убираем trailing whitespace */
+        // Trim whitespace (similar to legacy code)
         size_t len = strlen(line);
         while (len > 0 && isspace((unsigned char)line[len - 1])) {
             line[--len] = '\0';
         }
 
         if (len == 0) {
-            continue;  /* Пустая строка */
+            // Empty line - skip
+            linenoiseFree(line);
+            continue;
         }
 
-        /* Добавить в историю (и сохранить в файл) */
-        history_add(line);
 
+        // Process the command
         if (!process_command(line)) {
-            break;  /* Команда quit/exit */
+            // Quit/exit command
+            linenoiseFree(line);
+            break;
         }
+
+        linenoiseFree(line);
     }
-    #endif
 
     printf("\nExiting...\n");
 }
+
+// Remove the old complex repl_loop with history and Windows fallbacks
+// The old version spanned ~100 lines; replace entirely with the above
+
 
 /* ============================================================================
  * Главная функция и парсинг аргументов
@@ -1664,16 +1690,14 @@ static void print_usage(const char *prog_name) {
 }
 
 /**
- * Главная функция программы
+ * MAIN программы, тут мы используем парсер аргументов и инициализируем SOEM
  */
+
 int main(int argc, char *argv[]) {
     const char *nic_iface = NULL;
 
     printf("=== EtherCAT CLI Tool ===\n");
-    printf("Version 1.1 (SOEM 2.0)\n\n");
-
-    /* Инициализация context structure */
-    // memset(&ecx_context, 0, sizeof(ecx_context));
+    printf("Version 1.2 (SOEM 2.0 with linenoise)\n\n");
 
     /* Парсинг аргументов командной строки */
     for (int i = 1; i < argc; i++) {
@@ -1708,17 +1732,19 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    /* Инициализация SOEM */
+    /* Initialize SOEM */
     if (!soem_init(nic_iface)) {
         return 1;
     }
 
     printf("SOEM initialized on interface: %s\n", nic_iface);
 
-    /* Запуск интерактивного режима */
+    linenoiseHistorySetMaxLen(HISTORY_MAX_LEN);
+    linenoiseSetCompletionCallback(completion_callback);  // Enable completions
+    /* Start the simple REPL with linenoise */
     repl_loop();
 
-    /* Очистка ресурсов */
+    /* Cleanup */
     soem_cleanup();
 
     return 0;

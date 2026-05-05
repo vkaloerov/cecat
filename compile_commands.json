@@ -1,17 +1,32 @@
 [
-  {
-    "directory": "C:/workspace/drag_carrot/cecat",
-    "command": "clang -std=c99 -IC:/workspace/drag_carrot/SOEM-2.0.0/include -IC:/workspace/drag_carrot/SOEM-2.0.0/osal -IC:/workspace/drag_carrot/SOEM-2.0.0/osal/win32 -IC:/workspace/drag_carrot/SOEM-2.0.0/oshw/win32 -IC:/npcap-sdk/Include -c ecat_cli.c",
-    "file": "C:/workspace/drag_carrot/cecat/ecat_cli.c"
-  },
-  {
-    "directory": "C:/workspace/drag_carrot/cecat",
-    "command": "clang -std=c99 -IC:/workspace/drag_carrot/SOEM-2.0.0/include -IC:/workspace/drag_carrot/SOEM-2.0.0/osal -IC:/workspace/drag_carrot/SOEM-2.0.0/osal/win32 -IC:/workspace/drag_carrot/SOEM-2.0.0/oshw/win32 -IC:/npcap-sdk/Include -c my_hex_dump.c",
-    "file": "C:/workspace/drag_carrot/cecat/my_hex_dump.c"
-  },
-  {
-    "directory": "C:/workspace/drag_carrot/cecat",
-    "command": "clang -std=c99 -IC:/workspace/drag_carrot/SOEM-2.0.0/include -IC:/workspace/drag_carrot/SOEM-2.0.0/osal -IC:/workspace/drag_carrot/SOEM-2.0.0/osal/win32 -IC:/workspace/drag_carrot/SOEM-2.0.0/oshw/win32 -IC:/npcap-sdk/Include -c list_adapters.c",
-    "file": "C:/workspace/drag_carrot/cecat/list_adapters.c"
-  }
+{
+  "directory": "/home/vkaloerov/workspace/cecat/build",
+  "command": "/usr/bin/cc  -I/home/vkaloerov/workspace/cecat/../SOEM/build/include -I/home/vkaloerov/workspace/cecat/../SOEM/build/../include -I/home/vkaloerov/workspace/cecat/../SOEM/build/../osal -I/home/vkaloerov/workspace/cecat/../SOEM/build/../osal/linux -I/home/vkaloerov/workspace/cecat/../SOEM/build/../oshw/linux -I/home/vkaloerov/workspace/cecat/../linenoise -g -std=gnu99 -g -O0 -Wall -Wextra -Wno-unused-parameter -o CMakeFiles/dummy-ecat-cli.dir/ecat_cli.c.o -c /home/vkaloerov/workspace/cecat/ecat_cli.c",
+  "file": "/home/vkaloerov/workspace/cecat/ecat_cli.c",
+  "output": "CMakeFiles/dummy-ecat-cli.dir/ecat_cli.c.o"
+},
+{
+  "directory": "/home/vkaloerov/workspace/cecat/build",
+  "command": "/usr/bin/cc  -I/home/vkaloerov/workspace/cecat/../SOEM/build/include -I/home/vkaloerov/workspace/cecat/../SOEM/build/../include -I/home/vkaloerov/workspace/cecat/../SOEM/build/../osal -I/home/vkaloerov/workspace/cecat/../SOEM/build/../osal/linux -I/home/vkaloerov/workspace/cecat/../SOEM/build/../oshw/linux -I/home/vkaloerov/workspace/cecat/../linenoise -g -std=gnu99 -g -O0 -Wall -Wextra -Wno-unused-parameter -o CMakeFiles/dummy-ecat-cli.dir/my_hex_dump.c.o -c /home/vkaloerov/workspace/cecat/my_hex_dump.c",
+  "file": "/home/vkaloerov/workspace/cecat/my_hex_dump.c",
+  "output": "CMakeFiles/dummy-ecat-cli.dir/my_hex_dump.c.o"
+},
+{
+  "directory": "/home/vkaloerov/workspace/cecat/build",
+  "command": "/usr/bin/cc  -I/home/vkaloerov/workspace/cecat/../SOEM/build/include -I/home/vkaloerov/workspace/cecat/../SOEM/build/../include -I/home/vkaloerov/workspace/cecat/../SOEM/build/../osal -I/home/vkaloerov/workspace/cecat/../SOEM/build/../osal/linux -I/home/vkaloerov/workspace/cecat/../SOEM/build/../oshw/linux -I/home/vkaloerov/workspace/cecat/../linenoise -g -std=gnu99 -g -O0 -Wall -Wextra -Wno-unused-parameter -o CMakeFiles/dummy-ecat-cli.dir/helper_cmd_c.c.o -c /home/vkaloerov/workspace/cecat/helper_cmd_c.c",
+  "file": "/home/vkaloerov/workspace/cecat/helper_cmd_c.c",
+  "output": "CMakeFiles/dummy-ecat-cli.dir/helper_cmd_c.c.o"
+},
+{
+  "directory": "/home/vkaloerov/workspace/cecat/build",
+  "command": "/usr/bin/cc  -I/home/vkaloerov/workspace/cecat/../SOEM/build/include -I/home/vkaloerov/workspace/cecat/../SOEM/build/../include -I/home/vkaloerov/workspace/cecat/../SOEM/build/../osal -I/home/vkaloerov/workspace/cecat/../SOEM/build/../osal/linux -I/home/vkaloerov/workspace/cecat/../SOEM/build/../oshw/linux -I/home/vkaloerov/workspace/cecat/../linenoise -g -std=gnu99 -g -O0 -Wall -Wextra -Wno-unused-parameter -o CMakeFiles/dummy-ecat-cli.dir/home/vkaloerov/workspace/linenoise/linenoise.c.o -c /home/vkaloerov/workspace/linenoise/linenoise.c",
+  "file": "/home/vkaloerov/workspace/linenoise/linenoise.c",
+  "output": "CMakeFiles/dummy-ecat-cli.dir/home/vkaloerov/workspace/linenoise/linenoise.c.o"
+},
+{
+  "directory": "/home/vkaloerov/workspace/cecat/build",
+  "command": "/usr/bin/cc  -I/home/vkaloerov/workspace/cecat/../SOEM/build/include -I/home/vkaloerov/workspace/cecat/../SOEM/build/../include -I/home/vkaloerov/workspace/cecat/../SOEM/build/../osal -I/home/vkaloerov/workspace/cecat/../SOEM/build/../osal/linux -I/home/vkaloerov/workspace/cecat/../SOEM/build/../oshw/linux -g -std=gnu99 -g -O0 -Wall -Wextra -Wno-unused-parameter -o CMakeFiles/list-adapters.dir/list_adapters.c.o -c /home/vkaloerov/workspace/cecat/list_adapters.c",
+  "file": "/home/vkaloerov/workspace/cecat/list_adapters.c",
+  "output": "CMakeFiles/list-adapters.dir/list_adapters.c.o"
+}
 ]
