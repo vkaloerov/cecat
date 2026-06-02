@@ -95,6 +95,7 @@ static const char *available_commands[] = {
     "help", "quit", "exit", "scan", "read-config", "read", "write",
     "text-write", "verbose", "status", "pdo-start", "pdo-stop",
     "pdo-read", "pdo-write", "pdo-loop", "history", "reinit", "fsrt", "prtall",
+    "relays",
     // Add any others as needed, e.g., "motor-enable" if uncommented
     NULL  // Sentinel for iteration
 };
@@ -239,6 +240,16 @@ static void cmd_wap(int counter, int bytes_to_write) {
 
 }
 
+static void relays_set(int relays_val) {
+    process_data_t *pd = (process_data_t *)IOmap;
+    pd->outputs.Relays = relays_val;
+    for (int i = 0; i < 10; i++) {
+        ecx_send_processdata(&ecx_context);
+        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+        usleep(10000);
+    }
+}
+
 static void fsrt(int rel_target) {
     process_data_t *pd = (process_data_t *)IOmap;
     for (int i = 0; i < 10; i++) {
@@ -247,6 +258,8 @@ static void fsrt(int rel_target) {
         usleep(10000);
     }
     pd->outputs.Target_pos = pd->inputs.Motor_pos + rel_target;
+    pd->outputs.Control_flags = 1;
+    if(rel_target == 0)pd->outputs.Control_flags = 1;
     printf("Motor_pos is %u\n", pd->inputs.Motor_pos);
     printf("Target_pos set to %u\n", pd->outputs.Target_pos);
     for (int i = 0; i < 10; i++) {
@@ -381,6 +394,12 @@ void soem_scan_bus(void) {
     }
     log_verbose("Init bus completed successfully");
     process_data_t *pd = (process_data_t *)IOmap;
+
+    memcpy(&(pd->outputs._1_display), "TESTTESTTESTTEST", 16);
+    pd->outputs.Target_pos = 0;
+    pd->outputs.Max_speed = 0;
+    pd->outputs.Relays = 0;
+    pd->outputs.Control_flags = 0;
     /* Перед тем как перейти в OPERATIONAL стейт необходимо проверить что слейвы имеют валидные
        process data для этого отправляем и получаем их */
     ecx_send_processdata(&ecx_context);
@@ -392,10 +411,7 @@ void soem_scan_bus(void) {
 
 
 
-    memcpy(&(pd->outputs._1_display), "TESTTESTTESTTEST", 16);
-    pd->outputs.Target_pos = 0;
-    pd->outputs.Max_speed = 0;
-    pd->outputs.Relays = 0;
+
 #endif
 
 #if 0 // SOME DUMMY TEST
@@ -1592,7 +1608,12 @@ static bool process_command(char *line) {
             fsrt(rel_target);
         }
     }
-
+    else if (strcmp(argv[0], "relays") == 0) {
+        if (argc > 1) {
+            int relays_val = (int)strtol(argv[1], NULL, 0);
+            relays_set(relays_val);
+        }
+    }
     else if (strcmp(argv[0], "reinit") == 0){
 
         if (argc > 1 && strcmp(argv[1], "full") == 0) {
@@ -1662,10 +1683,6 @@ static void repl_loop(void) {
 
     printf("\nExiting...\n");
 }
-
-// Remove the old complex repl_loop with history and Windows fallbacks
-// The old version spanned ~100 lines; replace entirely with the above
-
 
 /* ============================================================================
  * Главная функция и парсинг аргументов

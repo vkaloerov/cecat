@@ -27,6 +27,7 @@ typedef struct OSAL_PACKED
         uint32_t Target_pos; /* addr 0x0010, slave DC_Device */
         uint32_t Max_speed; /* addr 0x0014, slave DC_Device */
         uint32_t Relays; /* addr 0x0018, slave DC_Device */
+        uint32_t Control_flags; /* addr 0x0018, slave DC_Device */
     } outputs;
     struct  OSAL_PACKED {
         uint16_t Dbg_fixed; /* addr 0x001C, slave DC_Device */
