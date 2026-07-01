@@ -43,6 +43,10 @@
 
 #include "../linenoise/linenoise.h"  // Add linenoise header
 
+#define MIN(a, b)   ((a) < (b) ? (a) : (b))
+#define MAX(a, b)   ((a) > (b) ? (a) : (b))
+#define CLAMP(v, lo, hi) ((v) < (lo) ? (lo) : (v) > (hi) ? (hi) : (v))
+
 // Remove MAX_COMMAND_LEN if defined in cli_history.h; define locally if needed
 #define MAX_COMMAND_LEN 1024  // Keep or adjust size
 // Helper to get a temp file path for history
@@ -243,6 +247,7 @@ static void cmd_wap(int counter, int bytes_to_write) {
 static void relays_set(int relays_val) {
     process_data_t *pd = (process_data_t *)IOmap;
     pd->outputs.Relays = relays_val;
+    pd->outputs.Relays1 = relays_val;
     for (int i = 0; i < 10; i++) {
         ecx_send_processdata(&ecx_context);
         ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
@@ -250,24 +255,109 @@ static void relays_set(int relays_val) {
     }
 }
 
+static void simple_communication_cycle(void) {
+    for (int i = 0; i < 10; i++) {
+        ecx_send_processdata(&ecx_context);
+        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+        usleep(10000);
+    }
+}
+
+static void nrelays_set(int n,int relays_val) {
+    process_data_t *pd = (process_data_t *)IOmap;
+    switch (n) {
+        case 0:
+            pd->outputs.Relays = relays_val;
+            break;
+        case 1:
+            pd->outputs.Relays1 = relays_val;
+            break;
+    }
+    simple_communication_cycle();
+}
+
+
 static void fsrt(int rel_target) {
     process_data_t *pd = (process_data_t *)IOmap;
-    for (int i = 0; i < 10; i++) {
-        ecx_send_processdata(&ecx_context);
-        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
-        usleep(10000);
-    }
+    simple_communication_cycle();
     pd->outputs.Target_pos = pd->inputs.Motor_pos + rel_target;
     pd->outputs.Control_flags = 1;
-    if(rel_target == 0)pd->outputs.Control_flags = 1;
+    pd->outputs.Target_pos1 = pd->inputs.Motor_pos1 + rel_target;
+    pd->outputs.Control_flags1 = 1;
+
+    if(rel_target == 0){
+	pd->outputs.Control_flags = 0;
+	pd->outputs.Control_flags1 = 0;
+
+    }
     printf("Motor_pos is %u\n", pd->inputs.Motor_pos);
     printf("Target_pos set to %u\n", pd->outputs.Target_pos);
-    for (int i = 0; i < 10; i++) {
-        ecx_send_processdata(&ecx_context);
-        ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
-        usleep(10000);
+    printf("Motor_pos1 is %u\n", pd->inputs.Motor_pos1);
+    printf("Target_pos1 set to %u\n", pd->outputs.Target_pos1);
+
+    simple_communication_cycle();
+
+}
+
+
+
+static int helper_spd_limiter(int spd) {
+    int spd_limited = spd;
+
+    // debug mode limits:
+    spd_limited = CLAMP(spd_limited, 200, 1000);
+
+    return CLAMP(spd_limited, 0, 1000);
+}
+
+static void nfspd(int n, int spd) {
+    simple_communication_cycle();
+    process_data_t *pd = (process_data_t *)IOmap;
+
+    // limiter
+    spd = helper_spd_limiter(spd);
+    printf("speed set to %d\n", spd);
+    if (n == 0) {
+        pd->outputs.Max_speed = spd;
+    } else if (n == 1) {
+        pd->outputs.Max_speed1 = spd;
+    } else {
+        pd->outputs.Max_speed = spd;
+        pd->outputs.Max_speed1 = spd;
+    }
+    simple_communication_cycle();
+}
+
+static void nfsrt(int n, int rel_target) {
+    simple_communication_cycle();
+    process_data_t *pd = (process_data_t *)IOmap;
+    int control_flags = (rel_target != 0) ? 1 : 0;
+    if (n == 0) {
+        if (control_flags) pd->outputs.Target_pos = pd->inputs.Motor_pos + rel_target;
+        pd->outputs.Control_flags = control_flags;
+
+    } else {
+        if (control_flags) pd->outputs.Target_pos1 = pd->inputs.Motor_pos1 + rel_target;
+        pd->outputs.Control_flags1 = control_flags;
     }
 
+    simple_communication_cycle();
+}
+
+static void tst1_case0() {
+    process_data_t *pd = (process_data_t *)IOmap;
+    for (int i = 0; i < 100; i++) {
+        // all stop wait 1 second
+        nrelays_set(1, 7);
+        nfsrt(1, 0);
+        simple_communication_cycle();
+        usleep(1000000);
+        // then set target to -500 and wait 2 seconds
+        nrelays_set(1, 15);
+        nfsrt(1, -500);
+        simple_communication_cycle();
+        usleep(2000000);
+    }
 }
 
 static void prtall(unsigned int num_iterations) {
@@ -275,10 +365,17 @@ static void prtall(unsigned int num_iterations) {
     for (unsigned int i = 0; i < num_iterations; i++) {
         ecx_send_processdata(&ecx_context);
         ecx_receive_processdata(&ecx_context, EC_TIMEOUTRET);
+	printf("######## 1\n");
         printf("POS:    %u\n", pd->inputs.Motor_pos);
         printf("TARGET: %u\n", pd->outputs.Target_pos);
         printf("DIFF:   %d\n", pd->inputs.Motor_pos - pd->outputs.Target_pos);
         printf("SPD:    %d\n", pd->inputs.Motor_speed);
+	printf("######## 2\n");
+        printf("POS:    %u\n", pd->inputs.Motor_pos1);
+        printf("TARGET: %u\n", pd->outputs.Target_pos1);
+        printf("DIFF:   %d\n", pd->inputs.Motor_pos1 - pd->outputs.Target_pos1);
+        printf("SPD:    %d\n", pd->inputs.Motor_speed1);
+
         usleep(100000);
     }
 
@@ -1195,80 +1292,6 @@ static void cmd_write(int argc, char **argv) {
     free(data);
 }
 
-/**
- * Конвертация UTF-8 в коды символов дисплея MT-08S2A-2KLW (кириллица)
- *
- * Дисплей MT-08S2A-2KLW использует специальную таблицу знакогенератора с поддержкой
- * кириллицы. Таблица преобразования (используется Страница 0 встроенного знакогенератора):
- *
- * ASCII (0x20-0x7F) - стандартные символы без изменений
- *
- * Кириллица:
- *   Все буквы которые похожи в алфавите английском и кириллице - сэкономлены.
- *   т.е. А а, В, Д д, Е е, К, М, Н, О о, Р р, С с, Т, у - взяты из английского алфавита по стандартным адресам
- *   Б -> 0xA0
- *   Г -> 0xA1
- *   Ё -> 0xA2
- *   Ж -> 0xA3
- *   З -> 0xA4
- *   И -> 0xA5
- *   Й -> 0xA6
- *   Л -> 0xA7
- *   П -> 0xA8
- *   У -> 0xA9
- *   Ф -> 0xAA
- *   Ч -> 0xAB
- *   Ш -> 0xAC
- *   Ъ -> 0xAD
- *   Ы -> 0xAE
- *   Э -> 0xAF
- *   Ю -> 0xB0
- *   Я -> 0xB1
- *   б -> 0xB2
- *   в -> 0xB3
- *   г -> 0xB4
- *   ё -> 0xB5
- *   ж -> 0xB6
- *   з -> 0xB7
- *   и -> 0xB8
- *   й -> 0xB9
- *   к -> 0xBA
- *   л -> 0xBB
- *   м -> 0xBC
- *   н -> 0xBD
- *   п -> 0xBE
- *   т -> 0xBF
- *   Д -> 0xE0
- *   Ц -> 0xE1
- *   Щ -> 0xE2
- *   д -> 0xE3
- *   ф -> 0xE4
- *   ц -> 0xE5
- *   щ -> 0xE6
- *   ч -> 0xC0
- *   ш -> 0xC1
- *   ъ -> 0xC2
- *   ы -> 0xC3
- *   ь -> 0xC4
- *   э -> 0xC5
- *   ю -> 0xC6
- *   я -> 0xC7
-
- * Возвращает код символа для дисплея или '?' если символ не найден
-*/
-#if 0
-static uint8_t utf8_to_mt_display(const unsigned char *utf8, size_t *bytes_read) {
-    *bytes_read = 1;
-
-    /* ASCII символы (0x00-0x7F) передаются как есть */
-    if (utf8[0] < 0x80) {
-        return utf8[0];
-    }
-    return '?';
-}
-#endif
-
-
 static void cmd_text_write(int argc, char **argv) {
     if (argc < 4) {
         printf("ERROR: Usage: text_write <slave_idx> <addr> <text>\n");
@@ -1306,14 +1329,6 @@ static void cmd_text_write(int argc, char **argv) {
         return;
     }
 
-    /* Конвертируем UTF-8 текст в коды дисплея MT-08S2A */
-    // size_t data_len = 0;
-    // size_t i = 0;
-    // while (i < text_len) {
-    //     size_t bytes_read = 0;
-    //     data[data_len++] = text[i];//utf8_to_mt_display((unsigned char*)&text[i], &bytes_read);
-    //     i += bytes_read;
-    // }
 
     soem_write_data(slave_idx, addr, (uint8_t*)text, text_len);
 
@@ -1608,10 +1623,52 @@ static bool process_command(char *line) {
             fsrt(rel_target);
         }
     }
+    else if (strcmp(argv[0], "fsrt0") == 0) {
+        if (argc > 1) {
+            int rel_target = atoi(argv[1]);
+            nfsrt(0, rel_target);
+        }
+    }
+    else if (strcmp(argv[0], "fsrt1") == 0) {
+        if (argc > 1) {
+            int rel_target = atoi(argv[1]);
+            nfsrt(1, rel_target);
+        }
+    }
+    else if (strcmp(argv[0], "fspd0") == 0) {
+        if (argc > 1) {
+            int spd = atoi(argv[1]);
+            nfspd(0, spd);
+        }
+    }
+    else if (strcmp(argv[0], "fspd1") == 0) {
+        if (argc > 1) {
+            int spd = atoi(argv[1]);
+            nfspd(1, spd);
+        }
+    }
+    else if (strcmp(argv[0], "fspd") == 0) {
+        if (argc > 1) {
+            int spd = atoi(argv[1]);
+            nfspd(3, spd);
+        }
+    }
     else if (strcmp(argv[0], "relays") == 0) {
         if (argc > 1) {
             int relays_val = (int)strtol(argv[1], NULL, 0);
             relays_set(relays_val);
+        }
+    }
+    else if (strcmp(argv[0], "rel0") == 0) {
+        if (argc > 1) {
+            int relays_val = (int)strtol(argv[1], NULL, 0);
+            nrelays_set(0, relays_val);
+        }
+    }
+    else if (strcmp(argv[0], "rel1") == 0) {
+        if (argc > 1) {
+            int relays_val = (int)strtol(argv[1], NULL, 0);
+            nrelays_set(1, relays_val);
         }
     }
     else if (strcmp(argv[0], "reinit") == 0){
@@ -1621,6 +1678,9 @@ static bool process_command(char *line) {
         } else {
             reinit(false);
         }
+    }
+    else if (strcmp(argv[0], "tst1_case0") == 0) {
+        tst1_case0();
     }
     else {
         legit_command = false;

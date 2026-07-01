@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.14)
 project(ecat-cli C)
 
 set(CMAKE_C_STANDARD 99)
@@ -187,7 +187,42 @@ else()
 endif()
 
 # ============================================================================
+# TCP/JSON <-> EtherCAT сервер — ecat-server
+# ============================================================================
+
+add_executable(ecat-server
+    ecat_eth.c
+    ecat_server_main.c
+    cJSON.c
+)
+
+if(WIN32)
+  target_include_directories(ecat-server PRIVATE
+        ${SOEM_DIR}/include
+        ${SOEM_DIR}/include/soem
+        ${SOEM_DIR}/osal
+        ${SOEM_DIR}/osal/win32
+        ${SOEM_DIR}/oshw/win32
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+  if(DEFINED NPCAP_SDK_DIR)
+    target_include_directories(ecat-server PRIVATE ${NPCAP_SDK_DIR}/Include)
+  endif()
+  target_link_libraries(ecat-server PRIVATE soem ws2_32 winmm wpcap packet)
+else()
+  target_include_directories(ecat-server PRIVATE
+        ${SOEM_DIR}/include
+        ${SOEM_DIR}/../include
+        ${SOEM_DIR}/../osal
+        ${SOEM_DIR}/../osal/linux
+        ${SOEM_DIR}/../oshw/linux
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+  target_link_libraries(ecat-server PRIVATE soem pthread rt)
+endif()
+
+# ============================================================================
 # Installation
 # ============================================================================
 
-install(TARGETS dummy-ecat-cli list-adapters DESTINATION bin)
+install(TARGETS dummy-ecat-cli list-adapters ecat-server DESTINATION bin)

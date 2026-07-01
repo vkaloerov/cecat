@@ -1,0 +1,14 @@
+ecx_close
+ecx_configdc
+ecx_config_init
+ecx_config_map
+ecx_config_map_group
+ecx_elist2string
+ecx_FPRD
+ecx_FPWR
+ecx_init
+ecx_iserror
+ecx_receive_processdata
+ecx_send_processdata
+ecx_statecheck
+ecx_writestate
