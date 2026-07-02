@@ -18,11 +18,14 @@ static void signal_handler(int sig)
 
 static void print_usage(const char *prog_name)
 {
-    printf("Usage: %s [-p <port>] [-h]\n\n", prog_name);
+    printf("Usage: %s -i <adapter> [-a <address>] [-p <port>] [-h]\n\n", prog_name);
     printf("Options:\n");
-    printf("  -p, --port <port>  TCP port to listen on (default: %d)\n",
+    printf("  -i, --adapter <name>  Network adapter/interface used by SOEM for the\n");
+    printf("                        EtherCAT master (e.g. \"eth0\", required)\n");
+    printf("  -a, --address <addr>  IPv4 address to listen on (default: 0.0.0.0)\n");
+    printf("  -p, --port <port>     TCP port to listen on (default: %d)\n",
            ECAT_SERVER_DEFAULT_PORT);
-    printf("  -h, --help         Show this help message and exit\n\n");
+    printf("  -h, --help            Show this help message and exit\n\n");
     printf("NDJSON Protocol (one JSON object per line over TCP)\n");
     printf("---------------------------------------------------\n\n");
     printf("Python -> C (commands):\n");
@@ -51,6 +54,8 @@ static void print_usage(const char *prog_name)
 int main(int argc, char *argv[])
 {
     uint16_t port = ECAT_SERVER_DEFAULT_PORT;
+    const char *bind_addr = "0.0.0.0";
+    const char *adapter   = NULL;
 
     for (int i = 1; i < argc; i++) {
         if ((strcmp(argv[i], "-p") == 0 || strcmp(argv[i], "--port") == 0)) {
@@ -64,6 +69,19 @@ int main(int argc, char *argv[])
                 return EXIT_FAILURE;
             }
             port = (uint16_t)p;
+        } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--address") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i]);
+                return EXIT_FAILURE;
+            }
+            bind_addr = argv[++i];
+        } else if (strcmp(argv[i], "-i") == 0 || strcmp(argv[i], "--adapter") == 0 ||
+                   strcmp(argv[i], "--interface") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: %s requires an argument\n", argv[i]);
+                return EXIT_FAILURE;
+            }
+            adapter = argv[++i];
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return EXIT_SUCCESS;
@@ -72,6 +90,12 @@ int main(int argc, char *argv[])
             print_usage(argv[0]);
             return EXIT_FAILURE;
         }
+    }
+
+    if (!adapter) {
+        fprintf(stderr, "Error: -i/--adapter <name> is required\n");
+        print_usage(argv[0]);
+        return EXIT_FAILURE;
     }
 
 #ifdef _WIN32
@@ -84,8 +108,9 @@ int main(int argc, char *argv[])
     sigaction(SIGTERM, &sa, NULL);
 #endif
 
-    printf("Starting ecat-server on port %u\n", (unsigned)port);
-    int ret = ecat_server_run(port);
+    printf("Starting ecat-server on %s:%u (adapter '%s')\n",
+           bind_addr, (unsigned)port, adapter);
+    int ret = ecat_server_run(bind_addr, port, adapter);
     if (ret != 0) {
         fprintf(stderr, "ecat_server_run failed\n");
         return EXIT_FAILURE;

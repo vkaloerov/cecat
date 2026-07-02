@@ -116,6 +116,9 @@ typedef enum {
     ECMD_PDO_WRITE,
     ECMD_STATUS,
     ECMD_SHUTDOWN,
+    ECMD_CLIENT_CONNECT,    /* internal: client just connected  */
+    ECMD_CLIENT_DISCONNECT, /* internal: client just disconnected */
+    ECMD_GET_PDO_MAPPING,   /* dynamic PDO field mapping (name/type/offset) */
 } ecat_cmd_t;
 
 typedef struct {
@@ -140,6 +143,9 @@ typedef struct {
     int      io_bytes;
     bool     pdo_running;
     bool     wkc_ok;
+    /* pdo_mapping: dynamically discovered PDO field layout (owned; handed off
+     * to the JSON response object and freed together with it) */
+    cJSON    *mapping;
 } ecat_response_t;
 
 /* ============================================================================
@@ -177,6 +183,9 @@ static char          s_IOmap[MAX_IO_MAP_SIZE];
 static ecx_contextt  s_ecx_ctx;
 static bool          s_initialized = false;
 static unsigned int  s_expectedWKC = 0;
+static char          s_adapter_name[128] = "";  /* из аргументов командной строки */
+
+
 
 /* ============================================================================
  * Утилиты
@@ -337,11 +346,240 @@ static void srv_soem_pdo_stop(void) {
     srv_log("PDO stopped");
 }
 
-/* Один PDO цикл; возвращает true если WKC совпал */
+/* Один PDO цикл; возвращает true если WKC совпал
+ */
 static bool srv_soem_exchange_pdo(void) {
     ecx_send_processdata(&s_ecx_ctx);
     int wkc = ecx_receive_processdata(&s_ecx_ctx, EC_TIMEOUTRET);
     return (unsigned int)wkc >= s_expectedWKC;
+}
+
+/* ============================================================================
+ * Динамический PDO mapping (аналогично slaveinfo.c: si_map_sii / si_siiPDO)
+ *
+ * PDO mapping читается напрямую из EEPROM (SII), без обращения к CoE SDO.
+ * Вместо печати в stdout строим JSON-описание каждого смапленного поля
+ * (имя, index/subindex, абсолютный байт/бит-оффсет внутри s_IOmap, тип и
+ * размер), чтобы Python-клиент мог сам паковать/распаковывать поля в
+ * бинарном буфере pdo_read/pdo_write, без жёстко зашитых в C-коде структур.
+ * ============================================================================ */
+
+/* Строковое имя типа CoE (аналог dtype2string() из slaveinfo.c) */
+static const char *srv_dtype2string(uint16_t dtype, uint16_t bitlen) {
+    static char str[32];
+    switch (dtype) {
+    case ECT_BOOLEAN:        snprintf(str, sizeof(str), "BOOLEAN");   break;
+    case ECT_INTEGER8:       snprintf(str, sizeof(str), "INTEGER8");  break;
+    case ECT_INTEGER16:      snprintf(str, sizeof(str), "INTEGER16"); break;
+    case ECT_INTEGER32:      snprintf(str, sizeof(str), "INTEGER32"); break;
+    case ECT_INTEGER24:      snprintf(str, sizeof(str), "INTEGER24"); break;
+    case ECT_INTEGER64:      snprintf(str, sizeof(str), "INTEGER64"); break;
+    case ECT_UNSIGNED8:      snprintf(str, sizeof(str), "UNSIGNED8");  break;
+    case ECT_UNSIGNED16:     snprintf(str, sizeof(str), "UNSIGNED16"); break;
+    case ECT_UNSIGNED32:     snprintf(str, sizeof(str), "UNSIGNED32"); break;
+    case ECT_UNSIGNED24:     snprintf(str, sizeof(str), "UNSIGNED24"); break;
+    case ECT_UNSIGNED64:     snprintf(str, sizeof(str), "UNSIGNED64"); break;
+    case ECT_REAL32:         snprintf(str, sizeof(str), "REAL32");     break;
+    case ECT_REAL64:         snprintf(str, sizeof(str), "REAL64");     break;
+    case ECT_BIT1:           snprintf(str, sizeof(str), "BIT1");       break;
+    case ECT_BIT2:           snprintf(str, sizeof(str), "BIT2");       break;
+    case ECT_BIT3:           snprintf(str, sizeof(str), "BIT3");       break;
+    case ECT_BIT4:           snprintf(str, sizeof(str), "BIT4");       break;
+    case ECT_BIT5:           snprintf(str, sizeof(str), "BIT5");       break;
+    case ECT_BIT6:           snprintf(str, sizeof(str), "BIT6");       break;
+    case ECT_BIT7:           snprintf(str, sizeof(str), "BIT7");       break;
+    case ECT_BIT8:           snprintf(str, sizeof(str), "BIT8");       break;
+    case ECT_VISIBLE_STRING: snprintf(str, sizeof(str), "VISIBLE_STRING(%d)", bitlen); break;
+    case ECT_OCTET_STRING:   snprintf(str, sizeof(str), "OCTET_STRING(%d)", bitlen);  break;
+    default:                 snprintf(str, sizeof(str), "UNKNOWN(0x%04X,%d)", dtype, bitlen); break;
+    }
+    return str;
+}
+
+/* Определяет знаковость/тип float и формат Python `struct`, которым
+ * можно напрямую распаковать байт-выровненное поле (little-endian, как
+ * требует EtherCAT). Для бит-полей/24-битных целых/строк возвращает NULL —
+ * клиент должен распаковать такие поля вручную по bit_offset/bit_len. */
+static void srv_dtype_pyinfo(uint16_t dtype, uint16_t bitlen,
+                              bool *out_signed, bool *out_float,
+                              const char **out_struct_fmt) {
+    *out_signed     = false;
+    *out_float      = false;
+    *out_struct_fmt = NULL;
+
+    switch (dtype) {
+    case ECT_INTEGER8:   *out_signed = true; if (bitlen == 8)  *out_struct_fmt = "<b"; break;
+    case ECT_INTEGER16:  *out_signed = true; if (bitlen == 16) *out_struct_fmt = "<h"; break;
+    case ECT_INTEGER32:  *out_signed = true; if (bitlen == 32) *out_struct_fmt = "<i"; break;
+    case ECT_INTEGER64:  *out_signed = true; if (bitlen == 64) *out_struct_fmt = "<q"; break;
+    case ECT_UNSIGNED8:  if (bitlen == 8)  *out_struct_fmt = "<B"; break;
+    case ECT_UNSIGNED16: if (bitlen == 16) *out_struct_fmt = "<H"; break;
+    case ECT_UNSIGNED32: if (bitlen == 32) *out_struct_fmt = "<I"; break;
+    case ECT_UNSIGNED64: if (bitlen == 64) *out_struct_fmt = "<Q"; break;
+    case ECT_REAL32:     *out_float  = true; if (bitlen == 32) *out_struct_fmt = "<f"; break;
+    case ECT_REAL64:     *out_float  = true; if (bitlen == 64) *out_struct_fmt = "<d"; break;
+    case ECT_INTEGER24:  *out_signed = true; break;  /* 3 байта, нет прямого struct-формата */
+    case ECT_UNSIGNED24:  break;                       /* 3 байта */
+    case ECT_BOOLEAN:
+    case ECT_BIT1: case ECT_BIT2: case ECT_BIT3: case ECT_BIT4:
+    case ECT_BIT5: case ECT_BIT6: case ECT_BIT7: case ECT_BIT8:
+    case ECT_VISIBLE_STRING:
+    case ECT_OCTET_STRING:
+    default:
+        break; /* бит-поле/строка — распаковка вручную на стороне Python */
+    }
+}
+
+/* Читает PDO mapping слейва напрямую из EEPROM/SII (категория ECT_SII_PDO),
+ * без единого SDO-запроса. Направление задаёт `t`: t=1 -> RXPDO (outputs),
+ * t=0 -> TXPDO (inputs) — как и в si_siiPDO() из slaveinfo.c. Вместо
+ * printf() добавляет по одному JSON-объекту на каждое смапленное (не
+ * filler) поле в массив `arr`. Прямой аналог si_siiPDO(); возвращает
+ * суммарную битовую длину прочитанных PDO. */
+static int srv_siiPDO_to_json(uint16_t slave, uint8_t t, int mapoffset, cJSON *arr) {
+    uint16_t a, w, c, e, er;
+    uint8_t  eectl;
+    uint16_t obj_idx;
+    uint8_t  obj_subidx, obj_name, obj_datatype, bitlen;
+    int      bitoffset = 0, totalsize = 0;
+    ec_eepromPDOt  eepPDO;
+    ec_eepromPDOt *PDO = &eepPDO;
+    char     str_name[EC_MAXNAME + 1];
+
+    eectl = s_ecx_ctx.slavelist[slave].eep_pdi;
+
+    PDO->nPDO     = 0;
+    PDO->Length   = 0;
+    PDO->Index[1] = 0;
+    for (c = 0; c < EC_MAXSM; c++) PDO->SMbitsize[c] = 0;
+    if (t > 1) t = 1;
+
+    PDO->Startpos = ecx_siifind(&s_ecx_ctx, slave, ECT_SII_PDO + t);
+    if (PDO->Startpos > 0) {
+        a = PDO->Startpos;
+        w = ecx_siigetbyte(&s_ecx_ctx, slave, a++);
+        w += (ecx_siigetbyte(&s_ecx_ctx, slave, a++) << 8);
+        PDO->Length = w;
+        c = 1;
+        do {
+            PDO->nPDO++;
+            PDO->Index[PDO->nPDO] = ecx_siigetbyte(&s_ecx_ctx, slave, a++);
+            PDO->Index[PDO->nPDO] += (ecx_siigetbyte(&s_ecx_ctx, slave, a++) << 8);
+            PDO->BitSize[PDO->nPDO] = 0;
+            c++;
+            e = ecx_siigetbyte(&s_ecx_ctx, slave, a++);
+            PDO->SyncM[PDO->nPDO] = ecx_siigetbyte(&s_ecx_ctx, slave, a++);
+            a++;
+            obj_name = ecx_siigetbyte(&s_ecx_ctx, slave, a++);
+            a += 2;
+            c += 2;
+            if (PDO->SyncM[PDO->nPDO] < EC_MAXSM) {
+                str_name[0] = 0;
+                if (obj_name) ecx_siistring(&s_ecx_ctx, str_name, slave, obj_name);
+
+                for (er = 1; er <= e; er++) {
+                    c += 4;
+                    obj_idx = ecx_siigetbyte(&s_ecx_ctx, slave, a++);
+                    obj_idx += (ecx_siigetbyte(&s_ecx_ctx, slave, a++) << 8);
+                    obj_subidx = ecx_siigetbyte(&s_ecx_ctx, slave, a++);
+                    obj_name = ecx_siigetbyte(&s_ecx_ctx, slave, a++);
+                    obj_datatype = ecx_siigetbyte(&s_ecx_ctx, slave, a++);
+                    bitlen = ecx_siigetbyte(&s_ecx_ctx, slave, a++);
+
+                    int abs_byte = mapoffset + (bitoffset / 8);
+                    int abs_bit  = bitoffset % 8;
+
+                    PDO->BitSize[PDO->nPDO] += bitlen;
+                    a += 2;
+
+                    if (obj_idx || obj_subidx) {
+                        char fname[EC_MAXNAME + 1] = {0};
+                        if (obj_name) ecx_siistring(&s_ecx_ctx, fname, slave, obj_name);
+
+                        bool        is_signed = false, is_float = false;
+                        const char *fmt       = NULL;
+                        srv_dtype_pyinfo(obj_datatype, bitlen, &is_signed, &is_float, &fmt);
+                        int size_bytes = (bitlen + 7) / 8;
+
+                        cJSON *f = cJSON_CreateObject();
+                        cJSON_AddStringToObject(f, "name",        fname);
+                        cJSON_AddNumberToObject(f, "index",       obj_idx);
+                        cJSON_AddNumberToObject(f, "subindex",    obj_subidx);
+                        cJSON_AddNumberToObject(f, "pdo_index",   PDO->Index[PDO->nPDO]);
+                        cJSON_AddNumberToObject(f, "sm",          PDO->SyncM[PDO->nPDO]);
+                        cJSON_AddNumberToObject(f, "byte_offset", abs_byte);
+                        cJSON_AddNumberToObject(f, "bit_offset",  abs_bit);
+                        cJSON_AddNumberToObject(f, "bit_len",     bitlen);
+                        cJSON_AddNumberToObject(f, "size_bytes",  size_bytes);
+                        cJSON_AddStringToObject(f, "dtype",       srv_dtype2string(obj_datatype, bitlen));
+                        cJSON_AddNumberToObject(f, "dtype_id",    obj_datatype);
+                        cJSON_AddBoolToObject(f,   "signed",      is_signed);
+                        cJSON_AddBoolToObject(f,   "is_float",    is_float);
+                        if (fmt) cJSON_AddStringToObject(f, "struct_fmt", fmt);
+                        else     cJSON_AddNullToObject(f, "struct_fmt");
+
+                        cJSON_AddItemToArray(arr, f);
+                    }
+
+                    bitoffset += bitlen;
+                    totalsize += bitlen;
+                }
+                PDO->SMbitsize[PDO->SyncM[PDO->nPDO]] += PDO->BitSize[PDO->nPDO];
+                c++;
+            } else {
+                c += 4 * e;
+                a += 8 * e;
+                c++;
+            }
+            if (PDO->nPDO >= (EC_MAXEEPDO - 1)) c = PDO->Length;
+        } while (c < PDO->Length);
+    }
+    if (eectl) ecx_eeprom2pdi(&s_ecx_ctx, slave);
+    return totalsize;
+}
+
+/* Строит полное JSON-описание PDO mapping всех слейвов шины, читая PDO
+ * mapping напрямую из EEPROM/SII (аналог si_map_sii() из slaveinfo.c: вызов
+ * srv_siiPDO_to_json() сначала для RXPDO (outputs, t=1), потом для TXPDO
+ * (inputs, t=0)). Работает только после успешного scan (когда
+ * slavelist[].outputs/inputs уже указывают внутрь s_IOmap), поэтому смещения
+ * получаются абсолютными в том же буфере, который возвращают
+ * pdo_read/принимает pdo_write. */
+static bool srv_soem_get_pdo_mapping(cJSON **out, char *err, int esz) {
+    if (!s_initialized)              { snprintf(err, esz, "SOEM not initialized"); return false; }
+    if (s_ecx_ctx.slavecount == 0)   { snprintf(err, esz, "Run 'scan' first");     return false; }
+
+    cJSON *root       = cJSON_CreateObject();
+    cJSON *slaves_arr = cJSON_CreateArray();
+    cJSON_AddItemToObject(root, "slaves", slaves_arr);
+
+    for (int slave = 1; slave <= s_ecx_ctx.slavecount; slave++) {
+        cJSON *sobj = cJSON_CreateObject();
+        cJSON_AddNumberToObject(sobj, "slave", slave);
+        cJSON_AddStringToObject(sobj, "name", s_ecx_ctx.slavelist[slave].name);
+
+        cJSON *outputs_arr = cJSON_CreateArray();
+        cJSON *inputs_arr  = cJSON_CreateArray();
+
+        int outputs_mapoffset = (int)((uint8_t *)s_ecx_ctx.slavelist[slave].outputs
+                                     - (uint8_t *)s_IOmap);
+        int inputs_mapoffset  = (int)((uint8_t *)s_ecx_ctx.slavelist[slave].inputs
+                                     - (uint8_t *)s_IOmap);
+
+        /* t=1 -> RXPDO (outputs), t=0 -> TXPDO (inputs), как в si_map_sii() */
+        int outputs_bits = srv_siiPDO_to_json((uint16_t)slave, 1, outputs_mapoffset, outputs_arr);
+        int inputs_bits  = srv_siiPDO_to_json((uint16_t)slave, 0, inputs_mapoffset,  inputs_arr);
+
+        cJSON_AddNumberToObject(sobj, "outputs_bits", outputs_bits);
+        cJSON_AddNumberToObject(sobj, "inputs_bits",  inputs_bits);
+        cJSON_AddItemToObject(sobj, "outputs", outputs_arr);
+        cJSON_AddItemToObject(sobj, "inputs",  inputs_arr);
+
+        cJSON_AddItemToArray(slaves_arr, sobj);
+    }
+
+    *out = root;
+    return true;
 }
 
 /* ============================================================================
@@ -391,6 +629,8 @@ static void ecat_handle_cmd(const ecat_command_t *cmd, ecat_response_t *r) {
     r->io_bytes     = 0;
     r->pdo_running  = g_shared.pdo_running;
     r->wkc_ok       = true;
+    r->mapping      = NULL;
+
 
     switch (cmd->type) {
 
@@ -425,6 +665,7 @@ static void ecat_handle_cmd(const ecat_command_t *cmd, ecat_response_t *r) {
         break;
 
     case ECMD_PDO_READ:
+        srv_log("PDO READ");
         if (!g_shared.pdo_running) {
             snprintf(r->err, sizeof(r->err), "PDO not running");
         } else {
@@ -435,6 +676,7 @@ static void ecat_handle_cmd(const ecat_command_t *cmd, ecat_response_t *r) {
         break;
 
     case ECMD_PDO_WRITE:
+        srv_log("PDO WRITE");
         if (!g_shared.pdo_running) {
             snprintf(r->err, sizeof(r->err), "PDO not running");
         } else {
@@ -454,6 +696,36 @@ static void ecat_handle_cmd(const ecat_command_t *cmd, ecat_response_t *r) {
     case ECMD_SHUTDOWN:
         g_shared.shutdown = true;
         r->ok = true;
+        break;
+
+    case ECMD_CLIENT_CONNECT: {
+        /* Клиент подключился — автоматически инициализируем SOEM, сканируем шину
+         * и переводим слейвы в OPERATIONAL (по аналогии с soem_scan_bus). */
+        bool ok = srv_soem_init(cmd->adapter, r->err, sizeof(r->err));
+        if (ok) ok = srv_soem_scan(&r->slave_count, &r->io_bytes, r->err, sizeof(r->err));
+        if (ok) ok = srv_soem_pdo_start(r->err, sizeof(r->err));
+        if (ok) g_shared.pdo_running = true;
+        r->ok          = ok;
+        r->pdo_running = g_shared.pdo_running;
+        if (ok)
+            srv_log("EtherCAT bus ready: %d slave(s), IO map %d bytes, OPERATIONAL",
+                    r->slave_count, r->io_bytes);
+        else
+            srv_log("EtherCAT auto-init on client connect failed: %s", r->err);
+        break;
+    }
+
+    case ECMD_CLIENT_DISCONNECT:
+        /* Клиент отключился — корректно останавливаем PDO и закрываем SOEM,
+         * т.к. один клиент соответствует ровно одному SOEM-мастеру. */
+        if (g_shared.pdo_running) srv_soem_pdo_stop();
+        srv_soem_cleanup();
+        r->pdo_running = false;
+        r->ok = true;
+        break;
+
+    case ECMD_GET_PDO_MAPPING:
+        r->ok = srv_soem_get_pdo_mapping(&r->mapping, r->err, sizeof(r->err));
         break;
 
     default:
@@ -476,6 +748,7 @@ static OS_THREAD_RET ecat_thread_func(void *arg) {
 
         /* --- 1. PDO обмен --- */
         if (g_shared.pdo_running) {
+            // srv_log("PDO exchange cycle");
             bool ok = srv_soem_exchange_pdo();
             if (!ok) {
                 if (++wkc_err_cnt >= WKC_ERR_THRESHOLD) {
@@ -504,6 +777,7 @@ static OS_THREAD_RET ecat_thread_func(void *arg) {
 
             ecat_response_t resp;
             memset(&resp, 0, sizeof(resp));
+            srv_log("handle_cmd: cmd_id=%d cmd=%d", cmd.req_id, cmd.type);
             ecat_handle_cmd(&cmd, &resp);
 
             os_mutex_lock(&g_shared.mtx);
@@ -542,6 +816,7 @@ static bool parse_json_cmd(cJSON *root, ecat_command_t *cmd,
 
     cmd->req_id = (int)jid->valuedouble;
     const char *name = jcmd->valuestring;
+    srv_log("id=%s cmd=%s", jid->string, jcmd->string);
 
     if      (!strcmp(name,"init"))      cmd->type = ECMD_INIT;
     else if (!strcmp(name,"cleanup"))   cmd->type = ECMD_CLEANUP;
@@ -552,6 +827,7 @@ static bool parse_json_cmd(cJSON *root, ecat_command_t *cmd,
     else if (!strcmp(name,"pdo_read"))  cmd->type = ECMD_PDO_READ;
     else if (!strcmp(name,"pdo_write")) cmd->type = ECMD_PDO_WRITE;
     else if (!strcmp(name,"status"))    cmd->type = ECMD_STATUS;
+    else if (!strcmp(name,"pdo_mapping")) cmd->type = ECMD_GET_PDO_MAPPING;
     else if (!strcmp(name,"shutdown"))  cmd->type = ECMD_SHUTDOWN;
     else { snprintf(err, esz, "Unknown cmd '%s'", name); return false; }
 
@@ -624,6 +900,14 @@ static cJSON *build_response(const ecat_response_t *r, ecat_cmd_t ct) {
         cJSON_AddBoolToObject(obj,   "wkc_ok",      r->wkc_ok);
         break;
 
+    case ECMD_GET_PDO_MAPPING:
+        if (r->mapping) {
+            /* Передаём владение объектом — он будет освобождён вместе с `obj`
+             * вызывающимом cJSON_Delete(). */
+            cJSON_AddItemToObject(obj, "mapping", r->mapping);
+        }
+        break;
+
     default:
         break;
     }
@@ -654,6 +938,7 @@ static void serve_client(sock_t client) {
 
         if (ch == '\n' || pos >= ECAT_JSON_MAX_MSG - 1) {
             linebuf[pos] = '\0';
+            srv_log("line: %s", linebuf);
             pos = 0;
             if (linebuf[0] == '\0') continue; /* пустая строка */
 
@@ -683,6 +968,7 @@ static void serve_client(sock_t client) {
 
             /* Передать команду EtherCAT потоку и ждать ответ */
             os_mutex_lock(&g_shared.mtx);
+            srv_log("serve_client parsed cmd: cmd_id=%d cmd=%d", cmd.req_id, cmd.type);
             g_shared.cmd         = cmd;
             g_shared.cmd_pending = true;
             g_shared.resp_ready  = false;
@@ -708,6 +994,28 @@ static void serve_client(sock_t client) {
     srv_log("Client handler done");
 }
 
+/* Отправить внутреннюю команду (не связанную с конкретным клиентским
+ * запросом) потоку EtherCAT и дождаться её выполнения. Используется главным
+ * потоком при подключении/отключении TCP клиента. */
+static void submit_internal_cmd(ecat_cmd_t type, ecat_response_t *resp_out) {
+    ecat_command_t cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.type   = type;
+    cmd.req_id = 0;
+    if (type == ECMD_CLIENT_CONNECT)
+        strncpy(cmd.adapter, s_adapter_name, sizeof(cmd.adapter) - 1);
+
+    os_mutex_lock(&g_shared.mtx);
+    g_shared.cmd         = cmd;
+    g_shared.cmd_pending = true;
+    g_shared.resp_ready  = false;
+    while (!g_shared.resp_ready && !g_shared.shutdown)
+        os_cond_wait(&g_shared.resp_cv, &g_shared.mtx);
+    if (resp_out) *resp_out = g_shared.resp;
+    g_shared.resp_ready = false;
+    os_mutex_unlock(&g_shared.mtx);
+}
+
 /* ============================================================================
  * Публичный API
  * ============================================================================ */
@@ -720,8 +1028,13 @@ void ecat_server_stop(void) {
     os_mutex_unlock(&g_shared.mtx);
 }
 
-int ecat_server_run(uint16_t port) {
+int ecat_server_run(const char *bind_addr, uint16_t port, const char *adapter) {
     if (port == 0) port = ECAT_SERVER_DEFAULT_PORT;
+
+    if (!adapter || adapter[0] == '\0') {
+        srv_log("EtherCAT adapter name is required");
+        return -1;
+    }
 
     /* Инициализация разделяемого состояния */
     memset(&g_shared,   0, sizeof(g_shared));
@@ -731,6 +1044,9 @@ int ecat_server_run(uint16_t port) {
     os_cond_init(&g_shared.resp_cv);
     os_mutex_init(&g_send_mtx);
     g_client_sock = SOCK_INVALID;
+
+    strncpy(s_adapter_name, adapter, sizeof(s_adapter_name) - 1);
+    s_adapter_name[sizeof(s_adapter_name) - 1] = '\0';
 
 #ifdef _WIN32
     WSADATA wsa;
@@ -749,17 +1065,25 @@ int ecat_server_run(uint16_t port) {
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
-    addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port        = htons(port);
+    addr.sin_family = AF_INET;
+    addr.sin_port   = htons(port);
+
+    if (!bind_addr || bind_addr[0] == '\0' ||
+        strcmp(bind_addr, "any") == 0 || strcmp(bind_addr, "0.0.0.0") == 0) {
+        addr.sin_addr.s_addr = INADDR_ANY;
+    } else if (inet_pton(AF_INET, bind_addr, &addr.sin_addr) != 1) {
+        srv_log("Invalid bind address '%s'", bind_addr); sock_close(srv); return -1;
+    }
 
     if (bind(srv, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        srv_log("bind() failed on port %u", port); sock_close(srv); return -1;
+        srv_log("bind() failed on %s:%u", bind_addr ? bind_addr : "0.0.0.0", port);
+        sock_close(srv); return -1;
     }
     if (listen(srv, 1) < 0) {
         srv_log("listen() failed"); sock_close(srv); return -1;
     }
-    srv_log("Listening on port %u (one client at a time)", port);
+    srv_log("Listening on %s:%u (one client at a time, adapter '%s')",
+            bind_addr ? bind_addr : "0.0.0.0", port, s_adapter_name);
 
     /* Запустить поток EtherCAT мастера */
     os_thread_t ecat_tid;
@@ -798,6 +1122,16 @@ int ecat_server_run(uint16_t port) {
         srv_log("Connection from %s:%d",
                 inet_ntoa(cli_addr.sin_addr), ntohs(cli_addr.sin_port));
 
+        /* Клиент и SOEM мастер связаны 1-к-1: автоматически инициализируем
+         * и сканируем шину перед тем, как отдать управление клиенту. */
+        ecat_response_t connect_resp;
+        memset(&connect_resp, 0, sizeof(connect_resp));
+        submit_internal_cmd(ECMD_CLIENT_CONNECT, &connect_resp);
+        if (!connect_resp.ok) {
+            srv_log("Warning: EtherCAT auto-init failed for this client: %s",
+                    connect_resp.err);
+        }
+
         os_mutex_lock(&g_shared.mtx);
         g_client_sock = client;
         os_mutex_unlock(&g_shared.mtx);
@@ -809,6 +1143,9 @@ int ecat_server_run(uint16_t port) {
         os_mutex_unlock(&g_shared.mtx);
 
         sock_close(client);
+
+        /* Клиент отключился — корректно завершаем его SOEM-сессию. */
+        submit_internal_cmd(ECMD_CLIENT_DISCONNECT, NULL);
     }
 
     /* Завершение */

@@ -24,6 +24,7 @@
  *   {"id":8,  "cmd":"status"}
  *   {"id":9,  "cmd":"cleanup"}
  *   {"id":10, "cmd":"shutdown"}
+ *   {"id":11, "cmd":"pdo_mapping"}
  *
  * C -> Python  (responses):
  *   {"id":1,  "ok":true}
@@ -32,6 +33,33 @@
  *   {"id":8,  "ok":true,  "initialized":true, "pdo_running":false,
  *             "slaves":3, "wkc_ok":true}
  *   {"id":3,  "ok":false, "err":"SOEM not initialized"}
+ *
+ *   {"id":11, "ok":true, "mapping": {
+ *       "slaves": [
+ *         { "slave":1, "name":"EM3E-556",
+ *           "outputs_bits":128, "inputs_bits":256,
+ *           "outputs": [
+ *             { "name":"Target_pos", "index":24674, "subindex":1,
+ *               "byte_offset":0, "bit_offset":0, "bit_len":32,
+ *               "size_bytes":4, "dtype":"INTEGER32", "dtype_id":792,
+ *               "signed":true, "is_float":false, "struct_fmt":"<i" },
+ *             ...
+ *           ],
+ *           "inputs": [ ... ]
+ *         }, ...
+ *       ]
+ *   }}
+ *
+ * The "pdo_mapping" command dynamically walks each slave's CoE PDO assign
+ * objects (0x1c10..0x1c13) via SDO reads (see srv_soem_get_pdo_mapping() /
+ * srv_pdo_assign_to_json() in ecat_eth.c, modeled after si_map_sdo() /
+ * si_PDOassign() in SOEM's slaveinfo.c sample) so the layout does not need to
+ * be hardcoded on the C side. "byte_offset"/"bit_offset" are absolute
+ * positions inside the same buffer returned by "pdo_read" / expected by
+ * "pdo_write". The C server never interprets field values itself: encoding
+ * and decoding of individual fields (using "struct_fmt", or manual bit
+ * extraction for sub-byte/24-bit/string fields) is entirely up to the
+ * client (see PdoImage in ecat_client.py).
  *
  * Async events (pushed by the EtherCAT thread, no "id" field):
  *   {"event":"wkc_error",   "expected":3, "consecutive":10}
@@ -42,11 +70,23 @@
  * ecat_server_run - Start the TCP/JSON <-> EtherCAT server and block until
  *                   shutdown is requested or a fatal error occurs.
  *
- * @port: TCP port to listen on (use ECAT_SERVER_DEFAULT_PORT if unsure).
+ * The server accepts exactly one TCP client at a time. The lifetime of the
+ * SOEM EtherCAT master session is tied 1:1 to that client's connection: the
+ * master is initialized and the bus is scanned/configured up to the
+ * OPERATIONAL state automatically as soon as a client connects, and it is
+ * cleanly stopped (PDO stop + SOEM close) automatically as soon as that
+ * client disconnects, so the next client starts from a clean state.
+ *
+ * @bind_addr: IPv4 address to listen on (e.g. "0.0.0.0" or "192.168.0.10").
+ *             NULL or an empty string binds to all interfaces (INADDR_ANY).
+ * @port:      TCP port to listen on (use ECAT_SERVER_DEFAULT_PORT if unsure).
+ * @adapter:   Network adapter/interface name used for the SOEM EtherCAT
+ *             master (e.g. "eth0", or "\\Device\\NPF_{...}" on Windows).
+ *             Required (must not be NULL/empty).
  *
  * Returns 0 on clean shutdown, -1 on error.
  */
-int ecat_server_run(uint16_t port);
+int ecat_server_run(const char *bind_addr, uint16_t port, const char *adapter);
 
 /*
  * ecat_server_stop - Signal the server to shut down gracefully.
